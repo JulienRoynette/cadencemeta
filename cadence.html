@@ -1,0 +1,647 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>CADENCE — jeu de rythme WebXR</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Anton&family=IBM+Plex+Mono:wght@400;500&family=Inter:wght@400;500;600&display=swap" rel="stylesheet" />
+<style>
+  :root{
+    --bg:#0b0e1a;
+    --bg2:#171130;
+    --ink:#f2ede4;
+    --muted:#8f8ab0;
+    --coral:#ff6a5c;
+    --gold:#ffcf5c;
+    --cyan:#4fd6c8;
+    --line:rgba(255,255,255,.09);
+    --panel:rgba(255,255,255,.035);
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%}
+  body{
+    font-family:"Inter",system-ui,sans-serif;
+    color:var(--ink);
+    background:
+      radial-gradient(120% 90% at 85% -10%, rgba(79,214,200,.14), transparent 55%),
+      radial-gradient(130% 100% at 0% 110%, rgba(255,106,92,.16), transparent 50%),
+      linear-gradient(160deg, var(--bg), var(--bg2));
+    overflow:hidden;
+  }
+  canvas{display:block}
+
+  /* ---- Overlay menu ---- */
+  #menu{
+    position:fixed; inset:0; z-index:10;
+    display:flex; align-items:center; justify-content:center;
+    padding:24px;
+  }
+  .card{
+    width:min(640px,100%);
+    background:var(--panel);
+    border:1px solid var(--line);
+    border-radius:20px;
+    backdrop-filter:blur(14px);
+    padding:40px 40px 34px;
+    box-shadow:0 30px 80px rgba(0,0,0,.45);
+  }
+  .eyebrow{
+    font-family:"IBM Plex Mono",monospace;
+    font-size:11px; letter-spacing:.28em; text-transform:uppercase;
+    color:var(--muted); display:flex; gap:10px; align-items:center;
+  }
+  .eyebrow::after{content:""; flex:1; height:1px; background:var(--line)}
+  h1{
+    font-family:"Anton",sans-serif; font-weight:400;
+    font-size:clamp(64px,13vw,116px); line-height:.82; letter-spacing:.01em;
+    margin:14px 0 6px;
+    background:linear-gradient(92deg,var(--coral),var(--gold) 55%,var(--cyan));
+    -webkit-background-clip:text; background-clip:text; color:transparent;
+  }
+  .tagline{color:var(--muted); font-size:15px; margin-bottom:26px}
+
+  .drop{
+    border:1.5px dashed var(--line); border-radius:14px;
+    padding:22px; text-align:center; cursor:pointer;
+    transition:border-color .2s, background .2s;
+    background:rgba(255,255,255,.02);
+  }
+  .drop:hover,.drop.over{border-color:var(--cyan); background:rgba(79,214,200,.06)}
+  .drop strong{color:var(--ink); font-weight:600}
+  .drop span{color:var(--muted); font-size:13px}
+  #file{display:none}
+
+  .viz{margin:18px 0 4px; height:88px; width:100%;
+    border-radius:12px; background:rgba(0,0,0,.25); border:1px solid var(--line)}
+
+  .status{
+    font-family:"IBM Plex Mono",monospace; font-size:12.5px; color:var(--muted);
+    min-height:20px; display:flex; gap:8px; align-items:center;
+  }
+  .dot{width:7px;height:7px;border-radius:50%;background:var(--muted);flex:none}
+  .dot.ok{background:var(--cyan);box-shadow:0 0 10px var(--cyan)}
+  .dot.busy{background:var(--gold);animation:pulse 1s infinite}
+  @keyframes pulse{50%{opacity:.35}}
+
+  .row{display:flex; align-items:center; gap:16px; margin-top:22px}
+  .row label{font-family:"IBM Plex Mono",monospace;font-size:11px;letter-spacing:.15em;
+    text-transform:uppercase;color:var(--muted);white-space:nowrap}
+  input[type=range]{flex:1;accent-color:var(--coral);height:4px}
+
+  .actions{display:flex;gap:12px;margin-top:26px;flex-wrap:wrap}
+  button.cta{
+    flex:1; min-width:160px; cursor:pointer;
+    font-family:"Inter",sans-serif; font-weight:600; font-size:15px;
+    color:#120c1e; border:none; border-radius:12px; padding:16px 20px;
+    background:linear-gradient(92deg,var(--coral),var(--gold));
+    transition:transform .12s, filter .2s, opacity .2s;
+  }
+  button.cta.ghost{background:transparent;color:var(--ink);border:1px solid var(--line)}
+  button.cta:hover:not(:disabled){transform:translateY(-1px);filter:brightness(1.05)}
+  button.cta:disabled{opacity:.4;cursor:not-allowed}
+  .hint{font-family:"IBM Plex Mono",monospace;font-size:11.5px;color:var(--muted);
+    margin-top:18px;line-height:1.6}
+  .hint b{color:var(--cyan);font-weight:500}
+
+  /* VRButton restyle */
+  #VRButton{border-radius:12px!important;font-family:"Inter",sans-serif!important}
+
+  /* score readout for desktop preview */
+  #hud2d{position:fixed;top:20px;left:20px;z-index:9;
+    font-family:"IBM Plex Mono",monospace;color:var(--ink);
+    display:none;text-shadow:0 2px 10px rgba(0,0,0,.6)}
+  #hud2d .sc{font-size:34px;font-weight:500}
+  #hud2d .cb{font-size:14px;color:var(--gold)}
+  #back{position:fixed;top:20px;right:20px;z-index:11;display:none;
+    background:rgba(0,0,0,.4);border:1px solid var(--line);color:var(--ink);
+    font-family:"IBM Plex Mono",monospace;font-size:12px;border-radius:10px;
+    padding:9px 14px;cursor:pointer}
+</style>
+</head>
+<body>
+
+<div id="menu">
+  <div class="card">
+    <div class="eyebrow">webxr · meta quest · rythme</div>
+    <h1>CADENCE</h1>
+    <p class="tagline">Charge ta musique. Frappe les cibles sur le tempo.</p>
+
+    <label class="drop" id="drop" for="file">
+      <div><strong>Charger une musique</strong></div>
+      <span>MP3, WAV, OGG… ou glisse un fichier ici</span>
+    </label>
+    <input id="file" type="file" accept="audio/*" />
+
+    <canvas class="viz" id="viz" width="1120" height="176"></canvas>
+    <div class="status"><span class="dot" id="dot"></span><span id="status">En attente d'une piste.</span></div>
+
+    <div class="row">
+      <label for="dens">Densité des cibles</label>
+      <input type="range" id="dens" min="0" max="1" step="0.05" value="0.5" />
+    </div>
+
+    <div class="actions">
+      <button class="cta" id="startVR" disabled>Entrer en VR</button>
+      <button class="cta ghost" id="startPreview" disabled>Aperçu bureau</button>
+    </div>
+
+    <p class="hint">
+      En VR : <b>gâchette</b> pour lancer la piste, puis frappe les cibles avec les manettes.<br>
+      Sur bureau (test) : <b>clic</b> pour frapper la cible dans la zone.
+    </p>
+  </div>
+</div>
+
+<button id="back">↩ menu</button>
+<div id="hud2d"><div class="sc" id="hudScore">0</div><div class="cb" id="hudCombo">combo ×0</div></div>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.161.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.161.0/examples/jsm/"
+  }
+}
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import { VRButton } from 'three/addons/webxr/VRButton.js';
+
+/* ------------------------------------------------------------------ *
+ *  ÉTAT GLOBAL
+ * ------------------------------------------------------------------ */
+const el = (id) => document.getElementById(id);
+let audioCtx = null;
+let decodedBuffer = null;     // AudioBuffer décodé
+let beats = [];               // timestamps (s) des battements détectés
+let playing = false;
+let finished = false;
+let songStartTime = 0;        // audioCtx.currentTime au démarrage
+let songDuration = 0;
+let score = 0, combo = 0, bestCombo = 0, hitCount = 0, missCount = 0;
+let sensitivity = 0.5;
+
+const TRAVEL = 1.9;           // secondes pour qu'une cible atteigne la zone
+const HIT_Z = -0.55;          // plan de frappe (devant le joueur)
+const SPAWN_Z = HIT_Z - 9;    // apparition au loin
+const HIT_RADIUS = 0.34;      // rayon de collision manette/cible
+const LANES = [
+  { x:-0.9, y:1.05 }, { x:-0.45, y:1.5 }, { x:0, y:1.15 },
+  { x:0.45, y:1.5 }, { x:0.9, y:1.05 }
+];
+const COLORS = [0xff6a5c, 0x4fd6c8]; // coral / cyan
+
+/* ------------------------------------------------------------------ *
+ *  CHARGEMENT + ANALYSE AUDIO
+ * ------------------------------------------------------------------ */
+function setStatus(text, state){
+  el('status').textContent = text;
+  const dot = el('dot');
+  dot.className = 'dot' + (state ? ' ' + state : '');
+}
+
+function ensureCtx(){
+  if(!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  return audioCtx;
+}
+
+async function loadFile(file){
+  try{
+    setStatus('Décodage de « ' + file.name +' »…', 'busy');
+    el('startVR').disabled = true; el('startPreview').disabled = true;
+    const buf = await file.arrayBuffer();
+    const ctx = ensureCtx();
+    decodedBuffer = await ctx.decodeAudioData(buf);
+    songDuration = decodedBuffer.duration;
+    setStatus('Analyse du rythme…', 'busy');
+    beats = await analyze(decodedBuffer, sensitivity);
+    drawWaveform(decodedBuffer, beats);
+    const bpm = estimateBpm(beats);
+    setStatus(beats.length + ' battements · ~' + bpm + ' BPM · ' + fmt(songDuration), 'ok');
+    el('startVR').disabled = false; el('startPreview').disabled = false;
+  }catch(err){
+    console.error(err);
+    setStatus('Impossible de lire ce fichier. Essaie un autre format audio.', null);
+  }
+}
+
+function fmt(s){ const m=Math.floor(s/60), r=Math.round(s%60); return m+':' + String(r).padStart(2,'0'); }
+
+// Détection de battements hors-ligne : on isole les basses (grosse caisse)
+// puis on repère les pics d'énergie au-dessus d'un seuil adaptatif.
+async function analyze(buffer, sens){
+  const off = new OfflineAudioContext(1, buffer.length, buffer.sampleRate);
+  const src = off.createBufferSource(); src.buffer = buffer;
+  const lp = off.createBiquadFilter(); lp.type='lowpass'; lp.frequency.value=160;
+  const hp = off.createBiquadFilter(); hp.type='highpass'; hp.frequency.value=40;
+  src.connect(lp); lp.connect(hp); hp.connect(off.destination); src.start(0);
+  const rendered = await off.startRendering();
+  const data = rendered.getChannelData(0);
+  const sr = rendered.sampleRate;
+
+  const win = Math.floor(sr * 0.02);           // fenêtres de 20 ms
+  const energies = [];
+  for(let i=0;i<data.length;i+=win){
+    let sum=0;
+    for(let j=0;j<win && i+j<data.length;j++){ const v=data[i+j]; sum+=v*v; }
+    energies.push(sum/win);
+  }
+  const history = Math.floor(1/0.02);          // moyenne glissante ~1 s
+  const minGap = 0.14;                          // 140 ms mini entre 2 battements
+  const factor = 1.25 + (1 - sens) * 1.6;       // sensibilité -> seuil
+  let last = -Infinity;
+  const out = [];
+  for(let i=0;i<energies.length;i++){
+    const start = Math.max(0, i - history);
+    let avg=0; for(let k=start;k<i;k++) avg+=energies[k];
+    avg /= Math.max(1, i - start);
+    const t = i * win / sr;
+    if(energies[i] > avg * factor && energies[i] > 0.0004 && t - last > minGap){
+      out.push(t); last = t;
+    }
+  }
+  return out;
+}
+
+function estimateBpm(bts){
+  if(bts.length < 4) return 0;
+  const gaps = [];
+  for(let i=1;i<bts.length;i++) gaps.push(bts[i]-bts[i-1]);
+  gaps.sort((a,b)=>a-b);
+  const med = gaps[Math.floor(gaps.length/2)];
+  return med > 0 ? Math.round(60/med) : 0;
+}
+
+function drawWaveform(buffer, bts){
+  const cv = el('viz'); const ctx = cv.getContext('2d');
+  const w = cv.width, h = cv.height;
+  ctx.clearRect(0,0,w,h);
+  const ch = buffer.getChannelData(0);
+  const step = Math.floor(ch.length / w);
+  ctx.strokeStyle = 'rgba(143,138,176,.55)'; ctx.lineWidth = 1;
+  ctx.beginPath();
+  for(let x=0;x<w;x++){
+    let min=1, max=-1;
+    for(let j=0;j<step;j++){ const v=ch[x*step+j]||0; if(v<min)min=v; if(v>max)max=v; }
+    ctx.moveTo(x, (1+min)*h/2); ctx.lineTo(x, (1+max)*h/2);
+  }
+  ctx.stroke();
+  // marqueurs de battements
+  ctx.fillStyle = 'rgba(255,106,92,.85)';
+  for(const t of bts){ const x=(t/buffer.duration)*w; ctx.fillRect(x,0,1.4,h); }
+}
+
+/* ------------------------------------------------------------------ *
+ *  SCÈNE THREE.JS
+ * ------------------------------------------------------------------ */
+let renderer, scene, camera, clock;
+let controllers = [], grips = [];
+const targets = [];
+const particles = [];
+let hud, hudCanvas, hudCtx, hudTex;
+let hitRing, analyser, freqData;
+let playSource = null;
+let nextBeatIndex = 0;
+let started3D = false;
+
+function init3D(){
+  if(started3D) return; started3D = true;
+
+  renderer = new THREE.WebGLRenderer({ antialias:true, alpha:false });
+  renderer.setPixelRatio(window.devicePixelRatio);
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  renderer.xr.enabled = true;
+  document.body.appendChild(renderer.domElement);
+
+  scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x0b0e1a);
+  scene.fog = new THREE.Fog(0x0b0e1a, 6, 13);
+
+  camera = new THREE.PerspectiveCamera(70, window.innerWidth/window.innerHeight, 0.05, 60);
+  camera.position.set(0, 1.5, 2.2);
+  camera.lookAt(0, 1.3, -3);
+
+  scene.add(new THREE.HemisphereLight(0xbcd6ff, 0x1a1030, 1.1));
+  const key = new THREE.DirectionalLight(0xffffff, 0.7);
+  key.position.set(2, 4, 2); scene.add(key);
+
+  // sol : grille + plan
+  const grid = new THREE.GridHelper(40, 40, 0x4fd6c8, 0x2a2350);
+  grid.material.opacity = 0.35; grid.material.transparent = true;
+  scene.add(grid);
+  const floor = new THREE.Mesh(
+    new THREE.PlaneGeometry(40,40),
+    new THREE.MeshStandardMaterial({ color:0x0a0d18, roughness:1 })
+  );
+  floor.rotation.x = -Math.PI/2; floor.position.y = -0.01; scene.add(floor);
+
+  // anneau de la zone de frappe
+  hitRing = new THREE.Mesh(
+    new THREE.TorusGeometry(1.15, 0.02, 8, 64),
+    new THREE.MeshBasicMaterial({ color:0xffcf5c, transparent:true, opacity:0.35 })
+  );
+  hitRing.position.set(0, 1.3, HIT_Z);
+  scene.add(hitRing);
+
+  // manettes + maillets
+  const grimo = new THREE.CylinderGeometry(0.012,0.012,0.22,10);
+  for(let i=0;i<2;i++){
+    const c = renderer.xr.getController(i);
+    c.userData.vel = new THREE.Vector3();
+    c.userData.prev = new THREE.Vector3();
+    c.addEventListener('connected', (e)=>{ c.userData.source = e.data; });
+    c.addEventListener('selectstart', onSelect);
+    scene.add(c); controllers.push(c);
+
+    const grip = renderer.xr.getControllerGrip(i);
+    const mallet = new THREE.Group();
+    const handle = new THREE.Mesh(grimo,
+      new THREE.MeshStandardMaterial({ color:0x2a2440, roughness:.6 }));
+    handle.position.y = 0.11; mallet.add(handle);
+    const head = new THREE.Mesh(new THREE.SphereGeometry(0.05,16,16),
+      new THREE.MeshStandardMaterial({ color:COLORS[i], emissive:COLORS[i], emissiveIntensity:.6 }));
+    head.position.y = 0.24; mallet.add(head);
+    grip.add(mallet); scene.add(grip); grips.push(grip);
+  }
+
+  // HUD (texture canvas) suivi de la tête
+  hudCanvas = document.createElement('canvas');
+  hudCanvas.width = 512; hudCanvas.height = 200;
+  hudCtx = hudCanvas.getContext('2d');
+  hudTex = new THREE.CanvasTexture(hudCanvas);
+  hud = new THREE.Mesh(
+    new THREE.PlaneGeometry(0.7, 0.27),
+    new THREE.MeshBasicMaterial({ map:hudTex, transparent:true, depthTest:false })
+  );
+  hud.renderOrder = 999;
+  scene.add(hud);
+  drawHud('Gâchette pour lancer');
+
+  // VRButton
+  const vb = VRButton.createButton(renderer);
+  document.body.appendChild(vb);
+  vb.click(); // ouvre directement le prompt VR
+
+  clock = new THREE.Clock();
+  window.addEventListener('resize', onResize);
+  renderer.domElement.addEventListener('pointerdown', onDesktopSwing);
+  renderer.setAnimationLoop(loop);
+}
+
+function onResize(){
+  camera.aspect = window.innerWidth/window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+}
+
+/* ------------------------------------------------------------------ *
+ *  LECTURE + SYNCHRO
+ * ------------------------------------------------------------------ */
+function startSong(){
+  if(playing || !decodedBuffer) return;
+  const ctx = ensureCtx();
+  if(ctx.state === 'suspended') ctx.resume();
+
+  // reset
+  score=0; combo=0; bestCombo=0; hitCount=0; missCount=0;
+  nextBeatIndex=0; finished=false;
+  for(const t of targets) scene.remove(t.mesh); targets.length=0;
+
+  playSource = ctx.createBufferSource();
+  playSource.buffer = decodedBuffer;
+  analyser = ctx.createAnalyser(); analyser.fftSize = 128;
+  freqData = new Uint8Array(analyser.frequencyBinCount);
+  playSource.connect(analyser); analyser.connect(ctx.destination);
+
+  songStartTime = ctx.currentTime + 0.15;
+  playSource.start(songStartTime);
+  playing = true;
+  updateHudScore();
+}
+
+function finish(){
+  playing = false; finished = true;
+  try{ playSource && playSource.stop(); }catch(e){}
+  const acc = hitCount+missCount>0 ? Math.round(100*hitCount/(hitCount+missCount)) : 0;
+  drawHud(score + ' pts · ' + acc + '% · combo max ×' + bestCombo, 'Gâchette pour rejouer');
+  el('hudScore').textContent = score;
+  el('hudCombo').textContent = 'précision ' + acc + '% · rejoue (clic)';
+}
+
+/* ------------------------------------------------------------------ *
+ *  CIBLES
+ * ------------------------------------------------------------------ */
+function spawnTarget(beatTime, idx){
+  const lane = LANES[idx % LANES.length];
+  const color = COLORS[idx % 2];
+  const geo = new THREE.IcosahedronGeometry(0.16, 0);
+  const mat = new THREE.MeshStandardMaterial({
+    color, emissive:color, emissiveIntensity:.5, roughness:.3, metalness:.1
+  });
+  const mesh = new THREE.Mesh(geo, mat);
+  mesh.position.set(lane.x, lane.y, SPAWN_Z);
+  scene.add(mesh);
+  targets.push({ mesh, beatTime, x:lane.x, y:lane.y, hit:false, dead:false });
+}
+
+function updateTargets(songTime){
+  // apparition des battements à venir
+  while(nextBeatIndex < beats.length && beats[nextBeatIndex] - TRAVEL <= songTime){
+    spawnTarget(beats[nextBeatIndex], nextBeatIndex);
+    nextBeatIndex++;
+  }
+  for(const t of targets){
+    if(t.dead) continue;
+    const progress = (songTime - (t.beatTime - TRAVEL)) / TRAVEL; // 0 -> 1 à la zone
+    t.mesh.position.z = SPAWN_Z + (HIT_Z - SPAWN_Z) * progress;
+    t.mesh.rotation.x += 0.02; t.mesh.rotation.y += 0.03;
+    if(!t.hit && progress > 1.22){       // ratée
+      t.dead = true; t.mesh.visible = false;
+      combo = 0; missCount++; updateHudScore();
+    }
+  }
+  // nettoyage
+  for(let i=targets.length-1;i>=0;i--){
+    if(targets[i].dead){ scene.remove(targets[i].mesh); targets.splice(i,1); }
+  }
+}
+
+function tryHit(pos){
+  let best=null, bestD=HIT_RADIUS;
+  for(const t of targets){
+    if(t.dead || t.hit) continue;
+    const p = (songTimeNow() - (t.beatTime - TRAVEL)) / TRAVEL;
+    if(p < 0.72 || p > 1.22) continue;   // hors fenêtre de frappe
+    const d = t.mesh.position.distanceTo(pos);
+    if(d < bestD){ bestD = d; best = t; }
+  }
+  if(best){
+    best.hit = true; best.dead = true;
+    hitCount++; combo++; bestCombo = Math.max(bestCombo, combo);
+    score += 100 + Math.min(combo,20)*10;
+    burst(best.mesh.position, best.mesh.material.color);
+    scene.remove(best.mesh);
+    updateHudScore();
+    return true;
+  }
+  return false;
+}
+
+function songTimeNow(){ return audioCtx ? audioCtx.currentTime - songStartTime : 0; }
+
+/* ------------------------------------------------------------------ *
+ *  PARTICULES
+ * ------------------------------------------------------------------ */
+function burst(pos, color){
+  for(let i=0;i<10;i++){
+    const p = new THREE.Mesh(
+      new THREE.SphereGeometry(0.025,6,6),
+      new THREE.MeshBasicMaterial({ color })
+    );
+    p.position.copy(pos);
+    const v = new THREE.Vector3((Math.random()-.5)*2,(Math.random()-.5)*2,(Math.random()-.5)*2)
+      .multiplyScalar(1.8);
+    particles.push({ mesh:p, v, life:0.5 });
+    scene.add(p);
+  }
+}
+function updateParticles(dt){
+  for(let i=particles.length-1;i>=0;i--){
+    const pa = particles[i];
+    pa.life -= dt;
+    pa.mesh.position.addScaledVector(pa.v, dt);
+    pa.v.multiplyScalar(0.92);
+    pa.mesh.material.opacity = Math.max(0, pa.life/0.5);
+    pa.mesh.material.transparent = true;
+    if(pa.life <= 0){ scene.remove(pa.mesh); particles.splice(i,1); }
+  }
+}
+
+/* ------------------------------------------------------------------ *
+ *  HUD
+ * ------------------------------------------------------------------ */
+function drawHud(line1, line2){
+  hudCtx.clearRect(0,0,512,200);
+  hudCtx.fillStyle = 'rgba(11,14,26,.72)';
+  roundRect(hudCtx, 6,6,500,188,22); hudCtx.fill();
+  hudCtx.textAlign='center';
+  hudCtx.fillStyle = '#f2ede4';
+  hudCtx.font = '600 62px Inter, sans-serif';
+  hudCtx.fillText(line1, 256, 96);
+  if(line2){
+    hudCtx.fillStyle = '#8f8ab0';
+    hudCtx.font = '500 26px "IBM Plex Mono", monospace';
+    hudCtx.fillText(line2, 256, 150);
+  }
+  hudTex.needsUpdate = true;
+}
+function updateHudScore(){
+  drawHud(String(score), 'combo ×' + combo);
+  el('hudScore').textContent = score;
+  el('hudCombo').textContent = 'combo ×' + combo;
+}
+function roundRect(c,x,y,w,h,r){
+  c.beginPath(); c.moveTo(x+r,y);
+  c.arcTo(x+w,y,x+w,y+h,r); c.arcTo(x+w,y+h,x,y+h,r);
+  c.arcTo(x,y+h,x,y,r); c.arcTo(x,y,x+w,y,r); c.closePath();
+}
+
+/* ------------------------------------------------------------------ *
+ *  BOUCLE
+ * ------------------------------------------------------------------ */
+const _p = new THREE.Vector3(), _q = new THREE.Quaternion(), _fwd = new THREE.Vector3();
+function loop(){
+  const dt = Math.min(clock.getDelta(), 0.05);
+  const cam = renderer.xr.isPresenting ? renderer.xr.getCamera() : camera;
+
+  // HUD accroché au regard
+  cam.getWorldPosition(_p); cam.getWorldQuaternion(_q);
+  _fwd.set(0,0,-1).applyQuaternion(_q);
+  hud.position.copy(_p).addScaledVector(_fwd, 1.4);
+  hud.position.y -= 0.42;
+  hud.quaternion.copy(_q);
+
+  if(playing){
+    const st = songTimeNow();
+    updateTargets(st);
+
+    // collisions manettes
+    for(const c of controllers){
+      if(!c.userData.source) continue;
+      c.getWorldPosition(_p);
+      tryHit(_p);
+    }
+
+    // pulsation ambiante sur les basses
+    if(analyser){
+      analyser.getByteFrequencyData(freqData);
+      let bass=0; for(let i=0;i<6;i++) bass+=freqData[i]; bass/=6/255;
+      hitRing.material.opacity = 0.25 + (bass/255)*0.5;
+      hitRing.scale.setScalar(1 + (bass/255)*0.06);
+    }
+
+    if(st > songDuration + 1.5) finish();
+  }
+
+  updateParticles(dt);
+  renderer.render(scene, camera);
+}
+
+/* ------------------------------------------------------------------ *
+ *  ENTRÉES
+ * ------------------------------------------------------------------ */
+function onSelect(){
+  if(!playing) startSong();
+}
+function onDesktopSwing(){
+  if(renderer.xr.isPresenting) return;
+  if(!playing){ startSong(); return; }
+  // frappe la meilleure cible dans la zone, quelle que soit sa position
+  let best=null, bestP=99;
+  for(const t of targets){
+    if(t.dead||t.hit) continue;
+    const p=(songTimeNow()-(t.beatTime-TRAVEL))/TRAVEL;
+    if(p<0.72||p>1.22) continue;
+    if(Math.abs(1-p)<Math.abs(1-bestP)){ bestP=p; best=t; }
+  }
+  if(best){ tryHit(best.mesh.position.clone()); }
+  else { combo=0; updateHudScore(); }
+}
+
+/* ------------------------------------------------------------------ *
+ *  UI MENU
+ * ------------------------------------------------------------------ */
+el('file').addEventListener('change', e=>{ if(e.target.files[0]) loadFile(e.target.files[0]); });
+const drop = el('drop');
+['dragenter','dragover'].forEach(ev=>drop.addEventListener(ev, e=>{e.preventDefault();drop.classList.add('over');}));
+['dragleave','drop'].forEach(ev=>drop.addEventListener(ev, e=>{e.preventDefault();drop.classList.remove('over');}));
+drop.addEventListener('drop', e=>{ const f=e.dataTransfer.files[0]; if(f) loadFile(f); });
+
+el('dens').addEventListener('change', async e=>{
+  sensitivity = parseFloat(e.target.value);
+  if(decodedBuffer){
+    setStatus('Ré-analyse…', 'busy');
+    beats = await analyze(decodedBuffer, sensitivity);
+    drawWaveform(decodedBuffer, beats);
+    setStatus(beats.length + ' battements · ~' + estimateBpm(beats) + ' BPM · ' + fmt(songDuration), 'ok');
+  }
+});
+
+el('startVR').addEventListener('click', ()=>{
+  el('menu').style.display='none';
+  init3D();
+});
+el('startPreview').addEventListener('click', ()=>{
+  el('menu').style.display='none';
+  el('hud2d').style.display='block';
+  el('back').style.display='block';
+  init3D();
+  // en mode bureau, un clic lance la piste
+});
+el('back').addEventListener('click', ()=>location.reload());
+</script>
+</body>
+</html>
