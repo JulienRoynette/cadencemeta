@@ -85,6 +85,15 @@
   .hint{font-family:"IBM Plex Mono",monospace;font-size:11.5px;color:var(--muted);
     margin-top:16px;line-height:1.7}
   .hint b{color:var(--cyan);font-weight:500}
+  .toggles{display:flex;gap:10px;flex-wrap:wrap;margin-top:16px}
+  .tgl{flex:1;min-width:200px;background:rgba(255,255,255,.02);border:1px solid var(--line);color:var(--ink);
+    font-family:"IBM Plex Mono",monospace;font-size:11.5px;border-radius:10px;padding:12px 13px;cursor:pointer;
+    transition:border-color .18s,background .18s,opacity .18s;text-align:left;line-height:1.4}
+  .tgl:hover{border-color:var(--cyan)}
+  .tgl.on{border-color:var(--cyan);background:rgba(79,214,200,.08);box-shadow:0 0 0 1px var(--cyan) inset}
+  .tgl.off{opacity:.6}
+  .tgl b{display:block;font-weight:600;font-size:12.5px;font-family:"Inter",sans-serif;color:var(--ink);margin-bottom:2px}
+  .tgl .val{color:var(--cyan)}
   #hud2d{position:fixed;top:20px;left:20px;z-index:9;font-family:"IBM Plex Mono",monospace;
     color:var(--ink);display:none;text-shadow:0 2px 10px rgba(0,0,0,.6)}
   #hud2d .sc{font-size:34px;font-weight:500}
@@ -135,6 +144,22 @@
       <input type="range" id="dens" min="0" max="1" step="0.05" value="0.5" />
     </div>
 
+    <div class="row">
+      <label for="assist">Facilité de visée</label>
+      <input type="range" id="assist" min="0" max="1" step="0.05" value="0.5" />
+    </div>
+
+    <div class="toggles">
+      <button class="tgl on" id="colorMatch">
+        <b>Association des couleurs</b>
+        <span>touche chaque cible avec la main de sa couleur · <span class="val" id="cmState">ON</span></span>
+      </button>
+      <button class="tgl on" id="soundBtn">
+        <b>Sons</b>
+        <span>effets de tir, impacts et décompte · <span class="val" id="sndState">ON</span></span>
+      </button>
+    </div>
+
     <div class="actions">
       <button class="cta" id="startVR" disabled>Entrer en VR</button>
       <button class="cta ghost" id="startPreview" disabled>Aperçu bureau</button>
@@ -167,22 +192,81 @@ import * as THREE from 'three';
 const el = (id)=>document.getElementById(id);
 let audioCtx=null, decodedBuffer=null, beats=[], songDuration=0;
 let state='menu';
-let songStartTime=0, countdownEnd=0;
+let songStartTime=0, countdownEnd=0, lastCount=0;
 let score=0, combo=0, bestCombo=0, hitCount=0, missCount=0, sensitivity=0.5;
 let weapon='pistols';             // pistols | swords | smg
+let sfxOn=true;                   // effets sonores
+let colorMatch=true;              // cibles associées à la couleur de la main
 
-const TRAVEL=1.9, HIT_Z=-0.55, SPAWN_Z=HIT_Z-9, AIM_CONE=THREE.MathUtils.degToRad(9);
-const SWORD_REACH=0.27, SMG_INTERVAL=0.09, HEAT_PER_SHOT=0.06, HEAT_COOL=0.35, HEAT_RESUME=0.3;
+const TRAVEL=1.9, HIT_Z=-0.55, SPAWN_Z=HIT_Z-9;
+const SMG_INTERVAL=0.09, HEAT_PER_SHOT=0.06, HEAT_COOL=0.35, HEAT_RESUME=0.3;
 const LANES=[{x:-0.9,y:1.05},{x:-0.45,y:1.5},{x:0,y:1.15},{x:0.45,y:1.5},{x:0.9,y:1.05}];
 
 const PALETTE=[0xff6a5c, 0x4fd6c8];
+const NEUTRAL_TARGET=0xffcf5c;    // couleur des cibles quand l'association est désactivée
 let swapColors=false;
+
+/* difficulté de visée : 0 = très précis, 1 = très permissif */
+let hitAssist=0.5;
+let AIM_CONE=THREE.MathUtils.degToRad(9), SWORD_REACH=0.27, HIT_EARLY=0.6, HIT_LATE=1.25;
+function applyDifficulty(){
+  const a=hitAssist;
+  AIM_CONE=THREE.MathUtils.degToRad(6+a*18);   // cône de visée : 6° → 24°
+  SWORD_REACH=0.20+a*0.30;                       // portée épée : 0.20 → 0.50
+  HIT_EARLY=0.62-a*0.22;                          // ouverture anticipée : 0.62 → 0.40
+  HIT_LATE =1.22+a*0.20;                          // tolérance tardive : 1.22 → 1.42
+}
+applyDifficulty();
 function handColor(h){ const right=(h==='right'); return right ? (swapColors?PALETTE[0]:PALETTE[1]) : (swapColors?PALETTE[1]:PALETTE[0]); }
 
 /* ==================== CHARGEMENT + ANALYSE ==================== */
 function setStatus(t,s){ el('status').textContent=t; el('dot').className='dot'+(s?' '+s:''); }
-function ensureCtx(){ if(!audioCtx) audioCtx=new (window.AudioContext||window.webkitAudioContext)(); return audioCtx; }
+function ensureCtx(){ if(!audioCtx){ audioCtx=new (window.AudioContext||window.webkitAudioContext)(); initSfx(audioCtx); } return audioCtx; }
 function fmt(s){ const m=Math.floor(s/60),r=Math.round(s%60); return m+':'+String(r).padStart(2,'0'); }
+
+/* ========================= SONS (SFX synthétisés) ========================= */
+/* Générés à la volée avec la Web Audio API : aucun fichier externe, et une
+   chaîne dédiée (sfxGain → destination) séparée de l'analyseur pour ne pas
+   fausser la réactivité des basses. */
+let sfxGain=null, sfxNoiseBuf=null;
+function initSfx(ctx){
+  if(sfxGain) return;
+  sfxGain=ctx.createGain(); sfxGain.gain.value=0.55; sfxGain.connect(ctx.destination);
+  const len=Math.floor(ctx.sampleRate*0.4);
+  sfxNoiseBuf=ctx.createBuffer(1,len,ctx.sampleRate);
+  const d=sfxNoiseBuf.getChannelData(0);
+  for(let i=0;i<len;i++) d[i]=Math.random()*2-1;
+}
+function sfxBlip(freq,dur,type,vol,slideTo){
+  if(!sfxOn||!audioCtx||!sfxGain) return;
+  const t=audioCtx.currentTime;
+  const o=audioCtx.createOscillator(); o.type=type||'square';
+  o.frequency.setValueAtTime(freq,t);
+  if(slideTo) o.frequency.exponentialRampToValueAtTime(slideTo,t+dur);
+  const g=audioCtx.createGain();
+  g.gain.setValueAtTime(0.0001,t);
+  g.gain.exponentialRampToValueAtTime(vol||0.4,t+0.006);
+  g.gain.exponentialRampToValueAtTime(0.0001,t+dur);
+  o.connect(g); g.connect(sfxGain); o.start(t); o.stop(t+dur+0.03);
+}
+function sfxNoise(dur,vol,freq){
+  if(!sfxOn||!audioCtx||!sfxNoiseBuf) return;
+  const t=audioCtx.currentTime;
+  const s=audioCtx.createBufferSource(); s.buffer=sfxNoiseBuf;
+  const f=audioCtx.createBiquadFilter(); f.type='lowpass'; f.frequency.value=freq||1200;
+  const g=audioCtx.createGain();
+  g.gain.setValueAtTime(vol||0.3,t);
+  g.gain.exponentialRampToValueAtTime(0.0001,t+dur);
+  s.connect(f); f.connect(g); g.connect(sfxGain); s.start(t); s.stop(t+dur+0.03);
+}
+const sfx={
+  hit(c){ const b=520+Math.min(c,24)*20; sfxBlip(b,0.12,'triangle',0.34,b*1.9); },  // aigu qui monte avec le combo
+  miss(){ sfxNoise(0.22,0.32,700); sfxBlip(150,0.18,'sawtooth',0.16,90); },
+  tick(){ sfxBlip(440,0.07,'square',0.22); },
+  go(){ sfxBlip(880,0.2,'square',0.32,1250); },
+  overheat(){ sfxNoise(0.3,0.38,950); sfxBlip(220,0.25,'sawtooth',0.18,120); },
+  start(){ sfxBlip(600,0.1,'triangle',0.26,900); }
+};
 
 async function loadFile(file){
   try{
@@ -236,6 +320,10 @@ function drawWaveform(buffer,bts){
 let renderer,scene,camera,clock;
 let controllers=[];
 const targets=[], particles=[], floats=[], reactive=[];
+/* pools d'objets réutilisables : évitent d'allouer géométries/matériaux à chaque
+   cible/particule/texte, principale source de saccades et de fuite mémoire GPU */
+const targetPool=[], particlePool=[], floatPool=[], floatTexCache=new Map();
+let TARGET_GEO=null, PARTICLE_GEO=null;
 let hud,hudCtx,hudTex,hitRing,analyser,freqData,playSource=null,nextBeatIndex=0,started3D=false;
 let ringFlash=0, resultMesh,resultCtx,resultTex;
 
@@ -285,8 +373,8 @@ function makeWeapons(color){
 
 function init3D(){
   if(started3D) return; started3D=true;
-  renderer=new THREE.WebGLRenderer({antialias:true});
-  renderer.setPixelRatio(window.devicePixelRatio);
+  renderer=new THREE.WebGLRenderer({antialias:true,powerPreference:'high-performance'});
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio,2));   // plafonné pour tenir 72/90 Hz sur Quest
   renderer.setSize(window.innerWidth,window.innerHeight);
   renderer.xr.enabled=true;
   document.body.appendChild(renderer.domElement);
@@ -294,6 +382,10 @@ function init3D(){
   scene=new THREE.Scene();
   scene.background=new THREE.Color(0x090b16);
   scene.fog=new THREE.Fog(0x090b16,9,22);
+
+  // géométries partagées par tous les objets poolés
+  TARGET_GEO=new THREE.IcosahedronGeometry(0.16,0);
+  PARTICLE_GEO=new THREE.SphereGeometry(0.025,6,6);
 
   camera=new THREE.PerspectiveCamera(70,window.innerWidth/window.innerHeight,0.05,80);
   camera.position.set(0,1.5,2.2); camera.lookAt(0,1.3,-3);
@@ -408,6 +500,7 @@ async function enterVR(){
     const session=await navigator.xr.requestSession('immersive-vr',{optionalFeatures:['local-floor','bounded-floor']});
     renderer.xr.setReferenceSpaceType('local-floor');
     await renderer.xr.setSession(session);
+    try{ renderer.xr.setFoveation && renderer.xr.setFoveation(1); }catch(e){}   // rendu fovéal max : soulage le GPU en périphérie
     session.addEventListener('end',onSessionEnd);
     el('menu').style.display='none';
     state='idle'; hud.visible=true; resultMesh.visible=false; drawHud('Gâchette : lancer','B : quitter');
@@ -426,6 +519,7 @@ function quitToMenu(){
 function startCountdown(){
   score=0;combo=0;bestCombo=0;hitCount=0;missCount=0;nextBeatIndex=0;
   clearTargets(); applyWeapon(); resultMesh.visible=false; hud.visible=true;
+  ensureCtx(); lastCount=0; sfx.start();
   state='countdown'; countdownEnd=performance.now()+3000;
 }
 function startSong(){
@@ -434,6 +528,7 @@ function startSong(){
   analyser=ctx.createAnalyser(); analyser.fftSize=128; freqData=new Uint8Array(analyser.frequencyBinCount);
   playSource.connect(analyser); analyser.connect(ctx.destination);
   songStartTime=ctx.currentTime+0.05; playSource.start(songStartTime);
+  sfx.go();
   state='playing'; updateHudScore();
 }
 function stopSong(){ try{ playSource&&playSource.stop(); }catch(e){} playSource=null; }
@@ -454,12 +549,22 @@ function rankFor(a){ if(a>=95)return['S',0xffcf5c]; if(a>=85)return['A',0x4fd6c8
   if(a>=70)return['B',0x8ad07a]; if(a>=50)return['C',0xffa15c]; return['D',0xff5b5b]; }
 
 /* ========================= CIBLES ========================= */
+function getTargetMesh(color){
+  let mesh=targetPool.pop();
+  if(!mesh) mesh=new THREE.Mesh(TARGET_GEO,
+    new THREE.MeshStandardMaterial({emissiveIntensity:.5,roughness:.3,metalness:.1}));
+  mesh.material.color.setHex(color); mesh.material.emissive.setHex(color);
+  mesh.rotation.set(0,0,0); mesh.visible=true;
+  if(!mesh.parent) scene.add(mesh);
+  return mesh;
+}
+function releaseTargetMesh(mesh){ mesh.visible=false; targetPool.push(mesh); }
 function spawnTarget(beatTime,idx){
-  const lane=LANES[idx%LANES.length], color=PALETTE[idx%2];
-  const mesh=new THREE.Mesh(new THREE.IcosahedronGeometry(0.16,0),
-    new THREE.MeshStandardMaterial({color,emissive:color,emissiveIntensity:.5,roughness:.3,metalness:.1}));
+  const lane=LANES[idx%LANES.length];
+  // couleur associée à une main, ou couleur neutre si l'association est désactivée
+  const color = colorMatch ? PALETTE[idx%2] : NEUTRAL_TARGET;
+  const mesh=getTargetMesh(color);
   mesh.position.set(lane.x,lane.y,SPAWN_Z);
-  scene.add(mesh);
   targets.push({mesh,beatTime,color,x:lane.x,y:lane.y,hit:false,dead:false});
 }
 function updateTargets(st){
@@ -469,17 +574,17 @@ function updateTargets(st){
     const p=(st-(t.beatTime-TRAVEL))/TRAVEL;
     t.mesh.position.z=SPAWN_Z+(HIT_Z-SPAWN_Z)*p;
     t.mesh.rotation.x+=0.02; t.mesh.rotation.y+=0.03;
-    if(!t.hit && p>1.22){ onMiss(t); }
+    if(!t.hit && p>HIT_LATE){ onMiss(t); }
   }
-  for(let i=targets.length-1;i>=0;i--){ if(targets[i].dead){ scene.remove(targets[i].mesh); targets.splice(i,1); } }
+  for(let i=targets.length-1;i>=0;i--){ if(targets[i].dead){ releaseTargetMesh(targets[i].mesh); targets.splice(i,1); } }
 }
 function onMiss(t){
   t.dead=true; t.mesh.visible=false; combo=0; missCount++; updateHudScore();
   burst(t.mesh.position, new THREE.Color(0xff3b3b));
   spawnFloat('RATÉ', 0xff5b5b, new THREE.Vector3(THREE.MathUtils.clamp(t.x,-0.8,0.8),1.35,HIT_Z));
-  ringFlash=performance.now()+240;
+  ringFlash=performance.now()+240; sfx.miss();
 }
-function clearTargets(){ for(const t of targets) scene.remove(t.mesh); targets.length=0; nextBeatIndex=0; }
+function clearTargets(){ for(const t of targets) releaseTargetMesh(t.mesh); targets.length=0; nextBeatIndex=0; }
 
 /* ==================== MÉCANIQUES D'ARME ==================== */
 const _p=new THREE.Vector3(),_q=new THREE.Quaternion(),_fwd=new THREE.Vector3(),_dir=new THREE.Vector3();
@@ -492,9 +597,9 @@ function fireShot(controller){          // pistolets + mitraillettes
   controller.userData.flash=performance.now()+70;
   let best=null,bestAng=AIM_CONE;
   for(const t of targets){
-    if(t.dead||t.hit||t.color!==color) continue;
+    if(t.dead||t.hit||(colorMatch && t.color!==color)) continue;
     const p=(songTimeNow()-(t.beatTime-TRAVEL))/TRAVEL;
-    if(p<0.6||p>1.25) continue;
+    if(p<HIT_EARLY||p>HIT_LATE) continue;
     _dir.copy(t.mesh.position).sub(_p).normalize();
     const ang=_fwd.angleTo(_dir);
     if(ang<bestAng){ bestAng=ang; best=t; }
@@ -509,9 +614,9 @@ function meleeCheck(controller){        // épées : contact
   _a.set(0,0,-0.05); controller.localToWorld(_a);
   _b.set(0,0,-0.6);  controller.localToWorld(_b);
   for(const t of targets){
-    if(t.dead||t.hit||t.color!==color) continue;
+    if(t.dead||t.hit||(colorMatch && t.color!==color)) continue;
     const p=(songTimeNow()-(t.beatTime-TRAVEL))/TRAVEL;
-    if(p<0.55||p>1.25) continue;
+    if(p<HIT_EARLY||p>HIT_LATE) continue;
     if(distToSegment(t.mesh.position,_a,_b)<SWORD_REACH){ hitTarget(t); haptic(controller,0.7,55); }
   }
 }
@@ -526,37 +631,46 @@ function distToSegment(pt,a,b){
 function hitTarget(t){
   t.hit=true; t.dead=true; hitCount++; combo++; bestCombo=Math.max(bestCombo,combo);
   score+=100+Math.min(combo,20)*10;
-  burst(t.mesh.position,t.mesh.material.color); scene.remove(t.mesh); updateHudScore();
+  burst(t.mesh.position,t.mesh.material.color); t.mesh.visible=false; sfx.hit(combo); updateHudScore();
 }
 function haptic(c,intensity,ms){ try{ c.userData.source?.gamepad?.hapticActuators?.[0]?.pulse(intensity,ms);}catch(e){} }
 
 /* ==================== PARTICULES & TEXTES ==================== */
 function burst(pos,color){
   for(let i=0;i<10;i++){
-    const p=new THREE.Mesh(new THREE.SphereGeometry(0.025,6,6),new THREE.MeshBasicMaterial({color}));
-    p.position.copy(pos);
+    let p=particlePool.pop();
+    if(!p) p=new THREE.Mesh(PARTICLE_GEO,new THREE.MeshBasicMaterial({transparent:true}));
+    p.material.color.copy(color); p.material.opacity=1; p.visible=true;
+    p.position.copy(pos); if(!p.parent) scene.add(p);
     const v=new THREE.Vector3((Math.random()-.5)*2,(Math.random()-.5)*2,(Math.random()-.5)*2).multiplyScalar(1.8);
-    particles.push({mesh:p,v,life:0.5}); scene.add(p);
+    particles.push({mesh:p,v,life:0.5});
   }
 }
 function updateParticles(dt){
   for(let i=particles.length-1;i>=0;i--){
     const pa=particles[i]; pa.life-=dt;
     pa.mesh.position.addScaledVector(pa.v,dt); pa.v.multiplyScalar(0.92);
-    pa.mesh.material.transparent=true; pa.mesh.material.opacity=Math.max(0,pa.life/0.5);
-    if(pa.life<=0){ scene.remove(pa.mesh); particles.splice(i,1); }
+    pa.mesh.material.opacity=Math.max(0,pa.life/0.5);
+    if(pa.life<=0){ pa.mesh.visible=false; particlePool.push(pa.mesh); particles.splice(i,1); }
   }
 }
-function spawnFloat(text,color,pos){
+function floatTexture(text,color){
+  // les textes ('RATÉ', 'SURCHAUFFE'…) sont peu nombreux : on met leur texture en cache
+  const key=text+'|'+color; let tex=floatTexCache.get(key); if(tex) return tex;
   const cv=document.createElement('canvas'); cv.width=256; cv.height=128;
   const cx=cv.getContext('2d'); cx.textAlign='center'; cx.textBaseline='middle';
   cx.font='700 64px Inter, sans-serif';
   cx.lineWidth=8; cx.strokeStyle='rgba(0,0,0,.55)'; cx.strokeText(text,128,64);
   cx.fillStyle='#'+color.toString(16).padStart(6,'0'); cx.fillText(text,128,64);
-  const tex=new THREE.CanvasTexture(cv);
-  const m=new THREE.Mesh(new THREE.PlaneGeometry(0.5,0.25),
-    new THREE.MeshBasicMaterial({map:tex,transparent:true,depthTest:false}));
-  m.position.copy(pos); m.renderOrder=998; scene.add(m);
+  tex=new THREE.CanvasTexture(cv); floatTexCache.set(key,tex); return tex;
+}
+function spawnFloat(text,color,pos){
+  const tex=floatTexture(text,color);
+  let m=floatPool.pop();
+  if(!m){ m=new THREE.Mesh(new THREE.PlaneGeometry(0.5,0.25),
+    new THREE.MeshBasicMaterial({transparent:true,depthTest:false})); m.renderOrder=998; }
+  m.material.map=tex; m.material.needsUpdate=true; m.material.opacity=1; m.visible=true;
+  m.position.copy(pos); if(!m.parent) scene.add(m);
   floats.push({mesh:m,life:0.85});
 }
 function updateFloats(dt){
@@ -565,7 +679,7 @@ function updateFloats(dt){
     f.mesh.position.y+=dt*0.55;
     f.mesh.material.opacity=Math.max(0,f.life/0.85);
     f.mesh.quaternion.copy(_camQuat);
-    if(f.life<=0){ scene.remove(f.mesh); floats.splice(i,1); }
+    if(f.life<=0){ f.mesh.visible=false; floatPool.push(f.mesh); floats.splice(i,1); }
   }
 }
 
@@ -631,7 +745,8 @@ function loop(){
 
   if(state==='countdown'){
     const remain=(countdownEnd-now)/1000;
-    if(remain<=0) startSong(); else drawHud(String(Math.ceil(remain)),'prépare-toi');
+    if(remain<=0){ startSong(); }
+    else { const n=Math.ceil(remain); if(n!==lastCount){ lastCount=n; sfx.tick(); } drawHud(String(n),'prépare-toi'); }
   }
 
   if(state==='playing'){
@@ -645,7 +760,7 @@ function loop(){
         if(c.userData.firing && !c.userData.overheated && (now-c.userData.lastShot)/1000>=SMG_INTERVAL){
           fireShot(c); c.userData.lastShot=now; c.userData.heat+=HEAT_PER_SHOT;
           if(c.userData.heat>=1){ c.userData.heat=1; c.userData.overheated=true;
-            controllerWorld(c,_pt); spawnFloat('SURCHAUFFE',0xff5b5b,_pt); }
+            controllerWorld(c,_pt); spawnFloat('SURCHAUFFE',0xff5b5b,_pt); sfx.overheat(); }
         }
         // jauge + teinte
         const pr=c.userData.parts;
@@ -693,7 +808,7 @@ function onDesktopClick(){
     let best=null,bp=99;
     for(const t of targets){ if(t.dead||t.hit)continue;
       const p=(songTimeNow()-(t.beatTime-TRAVEL))/TRAVEL;
-      if(p<0.6||p>1.25)continue; if(Math.abs(1-p)<Math.abs(1-bp)){bp=p;best=t;} }
+      if(p<HIT_EARLY||p>HIT_LATE)continue; if(Math.abs(1-p)<Math.abs(1-bp)){bp=p;best=t;} }
     if(best) hitTarget(best);
   }
 }
@@ -718,6 +833,21 @@ el('dens').addEventListener('change',async e=>{
   if(decodedBuffer){ setStatus('Ré-analyse…','busy');
     beats=await analyze(decodedBuffer,sensitivity); drawWaveform(decodedBuffer,beats);
     setStatus(beats.length+' battements · ~'+estimateBpm(beats)+' BPM · '+fmt(songDuration),'ok'); }
+});
+el('assist').addEventListener('input',e=>{ hitAssist=parseFloat(e.target.value); applyDifficulty(); });
+el('colorMatch').addEventListener('click',()=>{
+  colorMatch=!colorMatch;
+  const b=el('colorMatch');
+  b.classList.toggle('on',colorMatch); b.classList.toggle('off',!colorMatch);
+  el('cmState').textContent=colorMatch?'ON':'OFF';
+  el('swap').style.opacity=colorMatch?'1':'.4';   // inverser n'a de sens qu'avec l'association active
+});
+el('soundBtn').addEventListener('click',()=>{
+  sfxOn=!sfxOn;
+  const b=el('soundBtn');
+  b.classList.toggle('on',sfxOn); b.classList.toggle('off',!sfxOn);
+  el('sndState').textContent=sfxOn?'ON':'OFF';
+  if(sfxOn) sfx.tick();   // petit retour audible à l'activation
 });
 document.querySelectorAll('.wpn').forEach(btn=>btn.addEventListener('click',()=>{
   document.querySelectorAll('.wpn').forEach(b=>b.classList.remove('selected'));
