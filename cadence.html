@@ -216,8 +216,9 @@ const addCharge=x=>{ charge=Math.min(1,charge+x); };
 const TRAVEL=1.9, HIT_Z=-0.55, SPAWN_Z=HIT_Z-9;
 const SMG_INTERVAL=0.09, HEAT_PER_SHOT=0.06, HEAT_COOL=0.35, HEAT_RESUME=0.3;
 const LANES=[{x:-0.9,y:1.05},{x:-0.45,y:1.5},{x:0,y:1.15},{x:0.45,y:1.5},{x:0.9,y:1.05}];
-/* sabre laser : lame verticale (+Y) partant de l'émetteur ; trois lames de traînée mémorisées */
+/* sabre laser : lame inclinée vers l'avant (prolonge la main) ; TRAIL_SEG segments de traînée */
 const SABER_BASE=0.10, SABER_LEN=0.72, TRAIL_SEG=16;
+const SABER_TILT=-Math.PI/3;   // -60° : bascule la lame de la verticale vers l'axe de visée de la main
 
 const PALETTE=[0xff6a5c, 0x4fd6c8];
 const NEUTRAL_TARGET=0xffcf5c;    // couleur des cibles quand l'association est désactivée
@@ -391,6 +392,7 @@ function makeWeapons(color){
   const tipGlow=new THREE.Mesh(new THREE.SphereGeometry(0.028,14,10),
     new THREE.MeshBasicMaterial({color,transparent:true,opacity:0.45,blending:THREE.AdditiveBlending,depthWrite:false}));
   tipGlow.position.set(0,tipY,0); sword.add(tipGlow);
+  sword.rotation.x=SABER_TILT;   // incline la lame vers l'avant pour qu'elle prolonge la main
 
   // Laser de visée
   const laser=new THREE.Mesh(new THREE.CylinderGeometry(0.004,0.004,9,6),
@@ -424,8 +426,8 @@ function makeTrail(color){
 }
 function updateTrail(c){
   const tr=c.userData.trail; if(!tr) return;
-  _a.set(0,SABER_BASE,0); c.localToWorld(_a);              // base de la lame (monde)
-  _b.set(0,SABER_BASE+SABER_LEN,0); c.localToWorld(_b);    // pointe (monde)
+  _a.set(0,SABER_BASE,0).applyAxisAngle(_xAxis,SABER_TILT); c.localToWorld(_a);              // base de la lame (monde)
+  _b.set(0,SABER_BASE+SABER_LEN,0).applyAxisAngle(_xAxis,SABER_TILT); c.localToWorld(_b);    // pointe (monde)
   tr.samples.unshift({bx:_a.x,by:_a.y,bz:_a.z,tx:_b.x,ty:_b.y,tz:_b.z});
   if(tr.samples.length>TRAIL_SEG) tr.samples.pop();
   const pos=tr.geo.attributes.position.array, col=tr.geo.attributes.color.array, n=tr.samples.length, cc=tr.color;
@@ -713,6 +715,7 @@ function clearTargets(){ for(const t of targets) releaseTargetMesh(t.mesh); targ
 /* ==================== MÉCANIQUES D'ARME ==================== */
 const _p=new THREE.Vector3(),_q=new THREE.Quaternion(),_fwd=new THREE.Vector3(),_dir=new THREE.Vector3();
 const _a=new THREE.Vector3(),_b=new THREE.Vector3(),_pt=new THREE.Vector3();
+const _xAxis=new THREE.Vector3(1,0,0);   // axe de la bascule de la lame (doit rester synchro avec sword.rotation.x)
 
 function fireShot(controller){          // pistolets + mitraillettes
   const color=controller.userData.color;
@@ -734,9 +737,9 @@ function fireShot(controller){          // pistolets + mitraillettes
 
 function meleeCheck(controller){        // épées : contact
   const color=controller.userData.color;
-  // segment lame vertical (de l'émetteur à la pointe) en coordonnées monde
-  _a.set(0,SABER_BASE,0);           controller.localToWorld(_a);
-  _b.set(0,SABER_BASE+SABER_LEN,0); controller.localToWorld(_b);
+  // segment lame incliné (émetteur → pointe), même bascule que le visuel
+  _a.set(0,SABER_BASE,0).applyAxisAngle(_xAxis,SABER_TILT);           controller.localToWorld(_a);
+  _b.set(0,SABER_BASE+SABER_LEN,0).applyAxisAngle(_xAxis,SABER_TILT); controller.localToWorld(_b);
   for(const t of targets){
     if(t.dead||t.hit||(colorMatch && t.type==='normal' && t.color!==color)) continue;   // spéciales : toute main
     const p=(songTimeNow()-(t.beatTime-TRAVEL))/TRAVEL;
