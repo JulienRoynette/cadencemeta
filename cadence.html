@@ -227,7 +227,7 @@ let swapColors=false;
 const HIT_BASE=60;                // score de base d'un coup (× grade × multiplicateur)
 const MALUS_PEN=250;              // pénalité si on tire sur un piège
 const BOOM_RADIUS=1.4;            // rayon de destruction de l'explosion large
-const T_MALUS=0xff2b4a, T_ENERGY=0x4fd6c8, T_BOOM=0xffa030;   // couleurs des types spéciaux
+const T_MALUS=0xff1150, T_ENERGY=0x8b5cff, T_BOOM=0xff9500;   // rouge vif / violet / orange vif — distincts du corail-cyan des cibles normales
 
 /* difficulté de visée : 0 = très précis, 1 = très permissif */
 let hitAssist=0.5;
@@ -636,15 +636,32 @@ function gradeFor(p){ const d=Math.abs(1-p);
 /* pools par type : chaque type a sa géométrie, on ne mélange donc pas les meshes */
 const MESH_POOLS={normal:targetPool, malus:[], energie:[], boom:[]};
 function targetGeo(type){ return type==='malus'?MALUS_GEO : type==='energie'?ENERGY_GEO : type==='boom'?BOOM_GEO : TARGET_GEO; }
+/* icône flottante (emoji) posée au-dessus des bonus/malus pour les rendre non ambigus */
+const _spriteTex={};
+function spriteTexFor(type){
+  if(_spriteTex[type]) return _spriteTex[type];
+  const emo = type==='malus'?'⛔' : type==='energie'?'⚡' : '💥';
+  const cv=document.createElement('canvas'); cv.width=128; cv.height=128;
+  const cx=cv.getContext('2d'); cx.textAlign='center'; cx.textBaseline='middle'; cx.font='96px serif';
+  cx.fillText(emo,64,74);
+  const tex=new THREE.CanvasTexture(cv); _spriteTex[type]=tex; return tex;
+}
 function getTargetMesh(type,color){
   const pool=MESH_POOLS[type]||targetPool;
   let mesh=pool.pop();
   if(!mesh){
     mesh=new THREE.Mesh(targetGeo(type),
-      new THREE.MeshStandardMaterial({emissiveIntensity:type==='normal'?.5:.85,roughness:.3,metalness:.15}));
+      new THREE.MeshStandardMaterial({emissiveIntensity:type==='normal'?.5:1.0,roughness:.3,metalness:.15}));
     mesh.userData.pool=pool;
+    if(type!=='normal'){   // étiquette emoji billboardée (le Sprite fait toujours face à la caméra)
+      const spr=new THREE.Sprite(new THREE.SpriteMaterial({map:spriteTexFor(type),depthTest:false,transparent:true}));
+      spr.scale.set(0.2,0.2,0.2); spr.position.set(0,0.32,0); spr.renderOrder=996; mesh.add(spr);
+    }
   }
-  if(type==='malus'){ mesh.material.color.setHex(0x140008); mesh.material.emissive.setHex(T_MALUS); }
+  // couleur propre au type (les bonus n'empruntent plus la couleur de la main)
+  if(type==='malus'){ mesh.material.color.setHex(0x160010); mesh.material.emissive.setHex(T_MALUS); }
+  else if(type==='energie'){ mesh.material.color.setHex(T_ENERGY); mesh.material.emissive.setHex(T_ENERGY); }
+  else if(type==='boom'){ mesh.material.color.setHex(T_BOOM); mesh.material.emissive.setHex(T_BOOM); }
   else { mesh.material.color.setHex(color); mesh.material.emissive.setHex(color); }
   mesh.scale.setScalar(type==='boom'?1.25:1);
   mesh.rotation.set(0,0,0); mesh.visible=true;
@@ -654,9 +671,9 @@ function getTargetMesh(type,color){
 function releaseTargetMesh(mesh){ mesh.visible=false; mesh.scale.setScalar(1); (mesh.userData.pool||targetPool).push(mesh); }
 function pickType(){
   const r=Math.random();
-  if(r<0.06) return 'malus';      // piège à éviter
-  if(r<0.11) return 'energie';    // recharge d'ultime
-  if(r<0.14) return 'boom';       // explosion large (AoE)
+  if(r<0.09) return 'malus';      // piège à éviter (9 %)
+  if(r<0.19) return 'energie';    // recharge d'ultime (10 %)
+  if(r<0.25) return 'boom';       // explosion large / AoE (6 %)
   return 'normal';
 }
 function spawnTarget(beatTime,idx,type){
@@ -681,7 +698,9 @@ function updateTargets(st){
     if(t.dead) continue;
     const p=(st-(t.beatTime-TRAVEL))/TRAVEL;
     t.mesh.position.z=SPAWN_Z+(HIT_Z-SPAWN_Z)*p;
-    t.mesh.rotation.x+=0.02; t.mesh.rotation.y+=0.03;
+    if(t.type==='normal'){ t.mesh.rotation.x+=0.02; t.mesh.rotation.y+=0.03; }
+    else { t.mesh.rotation.y+=0.015;   // spéciales : pulsation qui attire l'œil, icône maintenue au-dessus
+      t.mesh.scale.setScalar((t.type==='boom'?1.25:1)*(1+0.14*Math.sin(performance.now()*0.006))); }
     if(!t.hit && p>HIT_LATE){
       if(t.type==='normal') onMiss(t);
       else { t.dead=true; t.mesh.visible=false; }   // piège évité (ok) / bonus manqué : sans pénalité
