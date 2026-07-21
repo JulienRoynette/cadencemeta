@@ -126,7 +126,7 @@
         <span class="ic">🔫</span><b>Pistolets</b><span>tir précis · un coup par gâchette</span>
       </button>
       <button class="wpn" data-w="swords">
-        <span class="ic">🗡️</span><b>Épées</b><span>frappe les cibles au contact</span>
+        <span class="ic">🗡️</span><b>Sabres laser</b><span>tranche les cibles · laisse une traînée</span>
       </button>
       <button class="wpn" data-w="smg">
         <span class="ic">💥</span><b>Mitraillettes</b><span>tir continu · gère la surchauffe</span>
@@ -167,7 +167,7 @@
 
     <p class="hint">
       En VR : <b>gâchette</b> pour lancer · <b>B</b> pause · <b>B</b> encore (en pause) : quitter.<br>
-      Pistolets/Mitraillettes : vise et tire la couleur de ta main. Épées : touche les cibles.<br>
+      Pistolets/Mitraillettes : vise et tire la couleur de ta main. Sabres : tranche les cibles.<br>
       Bureau (test) : <b>clic</b> tir · <b>P</b> pause · <b>Échap</b> quitter.
     </p>
   </div>
@@ -201,6 +201,8 @@ let colorMatch=true;              // cibles associées à la couleur de la main
 const TRAVEL=1.9, HIT_Z=-0.55, SPAWN_Z=HIT_Z-9;
 const SMG_INTERVAL=0.09, HEAT_PER_SHOT=0.06, HEAT_COOL=0.35, HEAT_RESUME=0.3;
 const LANES=[{x:-0.9,y:1.05},{x:-0.45,y:1.5},{x:0,y:1.15},{x:0.45,y:1.5},{x:0.9,y:1.05}];
+/* sabre laser : lame verticale (+Y) partant de l'émetteur ; trois lames de traînée mémorisées */
+const SABER_BASE=0.10, SABER_LEN=0.72, TRAIL_SEG=16;
 
 const PALETTE=[0xff6a5c, 0x4fd6c8];
 const NEUTRAL_TARGET=0xffcf5c;    // couleur des cibles quand l'association est désactivée
@@ -346,15 +348,30 @@ function makeWeapons(color){
   const mag=new THREE.Mesh(new THREE.BoxGeometry(0.03,0.09,0.03),new THREE.MeshStandardMaterial({color:0x161226}));
   mag.position.set(0,-0.08,0.02); smg.add(mag);
 
-  // Épée
+  // Sabre laser : lame verticale (+Y), cœur blanc incandescent + halo coloré additif
   const sword=new THREE.Group();
-  const hilt=new THREE.Mesh(new THREE.CylinderGeometry(0.015,0.015,0.12,10),new THREE.MeshStandardMaterial({color:0x2a2440}));
-  hilt.rotation.x=Math.PI/2; hilt.position.set(0,0,0.04); sword.add(hilt);
-  const guard=new THREE.Mesh(new THREE.BoxGeometry(0.14,0.02,0.02),new THREE.MeshStandardMaterial({color:0x4a4360}));
-  guard.position.set(0,0,-0.03); sword.add(guard);
-  const blade=new THREE.Mesh(new THREE.BoxGeometry(0.03,0.012,0.55),
-    new THREE.MeshStandardMaterial({color,emissive:color,emissiveIntensity:.6,roughness:.25,metalness:.2}));
-  blade.position.set(0,0,-0.33); sword.add(blade);
+  const bladeY=SABER_BASE+SABER_LEN/2, tipY=SABER_BASE+SABER_LEN;
+  // poignée métallique tenue dans la main, dans l'axe de la lame
+  const hilt=new THREE.Mesh(new THREE.CylinderGeometry(0.017,0.014,0.13,16),
+    new THREE.MeshStandardMaterial({color:0x2a2440,metalness:.75,roughness:.35}));
+  hilt.position.set(0,0.02,0); sword.add(hilt);
+  const emitter=new THREE.Mesh(new THREE.CylinderGeometry(0.021,0.019,0.025,16),
+    new THREE.MeshStandardMaterial({color:0x8a8a9a,metalness:.9,roughness:.2}));
+  emitter.position.set(0,0.095,0); sword.add(emitter);
+  // cœur blanc lumineux
+  const core=new THREE.Mesh(new THREE.CylinderGeometry(0.011,0.011,SABER_LEN,14),
+    new THREE.MeshBasicMaterial({color:0xffffff}));
+  core.position.set(0,bladeY,0); sword.add(core);
+  // halo coloré (donne la couleur de la main)
+  const glow=new THREE.Mesh(new THREE.CylinderGeometry(0.028,0.028,SABER_LEN,16),
+    new THREE.MeshBasicMaterial({color,transparent:true,opacity:0.45,blending:THREE.AdditiveBlending,depthWrite:false}));
+  glow.position.set(0,bladeY,0); sword.add(glow);
+  // pointe arrondie (cœur + halo)
+  const tipCore=new THREE.Mesh(new THREE.SphereGeometry(0.011,14,10),new THREE.MeshBasicMaterial({color:0xffffff}));
+  tipCore.position.set(0,tipY,0); sword.add(tipCore);
+  const tipGlow=new THREE.Mesh(new THREE.SphereGeometry(0.028,14,10),
+    new THREE.MeshBasicMaterial({color,transparent:true,opacity:0.45,blending:THREE.AdditiveBlending,depthWrite:false}));
+  tipGlow.position.set(0,tipY,0); sword.add(tipGlow);
 
   // Laser de visée
   const laser=new THREE.Mesh(new THREE.CylinderGeometry(0.004,0.004,9,6),
@@ -368,7 +385,40 @@ function makeWeapons(color){
   const heatFill=new THREE.Mesh(fillGeo,new THREE.MeshBasicMaterial({color:0x4fd6c8}));
   heatFill.position.set(-0.06,0.06,0.021); heatFill.scale.x=0.001;
 
-  return {pistol,smg,sword,laser,heatBg,heatFill,colored:[pBarrel,sBarrel,blade],sBarrel};
+  return {pistol,smg,sword,laser,heatBg,heatFill,colored:[pBarrel,sBarrel,glow,tipGlow],sBarrel};
+}
+
+/* Traînée du sabre : ruban entre la base et la pointe de la lame, échantillonné
+   à chaque frame et estompé du plus récent (près de la lame) au plus ancien. */
+function makeTrail(color){
+  const geo=new THREE.BufferGeometry();
+  const pos=new Float32Array(TRAIL_SEG*2*3), col=new Float32Array(TRAIL_SEG*2*3);
+  geo.setAttribute('position',new THREE.BufferAttribute(pos,3));
+  geo.setAttribute('color',new THREE.BufferAttribute(col,3));
+  const idx=[];
+  for(let i=0;i<TRAIL_SEG-1;i++){ const a=i*2; idx.push(a,a+1,a+2, a+1,a+3,a+2); }
+  geo.setIndex(idx);
+  const mesh=new THREE.Mesh(geo,new THREE.MeshBasicMaterial({vertexColors:true,transparent:true,
+    opacity:0.9,blending:THREE.AdditiveBlending,depthWrite:false,side:THREE.DoubleSide}));
+  mesh.frustumCulled=false; mesh.renderOrder=997; mesh.visible=false;
+  return {mesh,geo,samples:[],color:new THREE.Color(color)};
+}
+function updateTrail(c){
+  const tr=c.userData.trail; if(!tr) return;
+  _a.set(0,SABER_BASE,0); c.localToWorld(_a);              // base de la lame (monde)
+  _b.set(0,SABER_BASE+SABER_LEN,0); c.localToWorld(_b);    // pointe (monde)
+  tr.samples.unshift({bx:_a.x,by:_a.y,bz:_a.z,tx:_b.x,ty:_b.y,tz:_b.z});
+  if(tr.samples.length>TRAIL_SEG) tr.samples.pop();
+  const pos=tr.geo.attributes.position.array, col=tr.geo.attributes.color.array, n=tr.samples.length, cc=tr.color;
+  for(let i=0;i<TRAIL_SEG;i++){
+    const s=tr.samples[Math.min(i,n-1)], a=i*6;
+    pos[a]=s.bx; pos[a+1]=s.by; pos[a+2]=s.bz;
+    pos[a+3]=s.tx; pos[a+4]=s.ty; pos[a+5]=s.tz;
+    const f=(1-i/(TRAIL_SEG-1)); const g=f*f;                // estompage quadratique
+    col[a]=cc.r*g; col[a+1]=cc.g*g; col[a+2]=cc.b*g;
+    col[a+3]=cc.r*g; col[a+4]=cc.g*g; col[a+5]=cc.b*g;
+  }
+  tr.geo.attributes.position.needsUpdate=true; tr.geo.attributes.color.needsUpdate=true;
 }
 
 function init3D(){
@@ -409,11 +459,13 @@ function init3D(){
     c.addEventListener('connected',(e)=>{
       c.userData.source=e.data;
       const col=handColor(e.data.handedness); c.userData.color=col;
-      for(const m of parts.colored){ m.material.color.setHex(col); m.material.emissive.setHex(col); }
+      for(const m of parts.colored){ m.material.color.setHex(col); if(m.material.emissive) m.material.emissive.setHex(col); }
       parts.laser.material.color.setHex(col);
+      if(c.userData.trail) c.userData.trail.color.setHex(col);
     });
     c.addEventListener('selectstart',()=>onSelect(c));
     c.addEventListener('selectend',()=>{ c.userData.firing=false; });
+    const trail=makeTrail(0xffffff); c.userData.trail=trail; scene.add(trail.mesh);
     scene.add(c); controllers.push(c);
   }
   applyWeapon();
@@ -450,6 +502,7 @@ function applyWeapon(){
     const heat = weapon==='smg';
     p.heatBg.visible=heat; p.heatFill.visible=heat;
     c.userData.heat=0; c.userData.overheated=false; c.userData.firing=false;
+    if(c.userData.trail){ c.userData.trail.samples.length=0; c.userData.trail.mesh.visible=false; }
   }
 }
 
@@ -610,9 +663,9 @@ function fireShot(controller){          // pistolets + mitraillettes
 
 function meleeCheck(controller){        // épées : contact
   const color=controller.userData.color;
-  // segment lame (du garde à la pointe) en coordonnées monde
-  _a.set(0,0,-0.05); controller.localToWorld(_a);
-  _b.set(0,0,-0.6);  controller.localToWorld(_b);
+  // segment lame vertical (de l'émetteur à la pointe) en coordonnées monde
+  _a.set(0,SABER_BASE,0);           controller.localToWorld(_a);
+  _b.set(0,SABER_BASE+SABER_LEN,0); controller.localToWorld(_b);
   for(const t of targets){
     if(t.dead||t.hit||(colorMatch && t.color!==color)) continue;
     const p=(songTimeNow()-(t.beatTime-TRAVEL))/TRAVEL;
@@ -741,6 +794,10 @@ function loop(){
     c.userData.prevB=pressed;
     const p=c.userData.parts;
     if(p&&p.laser.visible) p.laser.material.opacity=now<c.userData.flash?0.95:0.18;
+    // traînée du sabre : active tant qu'on tient le sabre (hors menu/pause)
+    const tr=c.userData.trail;
+    if(tr){ const on = weapon==='swords' && state!=='menu' && state!=='paused';
+      tr.mesh.visible=on; if(on) updateTrail(c); else tr.samples.length=0; }
   }
 
   if(state==='countdown'){
@@ -855,8 +912,8 @@ document.querySelectorAll('.wpn').forEach(btn=>btn.addEventListener('click',()=>
 }));
 el('swap').addEventListener('click',()=>{ swapColors=!swapColors; refreshLegend();
   for(const c of controllers){ if(c.userData.source){ const col=handColor(c.userData.source.handedness);
-    c.userData.color=col; for(const m of c.userData.parts.colored){ m.material.color.setHex(col); m.material.emissive.setHex(col); }
-    c.userData.parts.laser.material.color.setHex(col); } } });
+    c.userData.color=col; for(const m of c.userData.parts.colored){ m.material.color.setHex(col); if(m.material.emissive) m.material.emissive.setHex(col); }
+    c.userData.parts.laser.material.color.setHex(col); if(c.userData.trail) c.userData.trail.color.setHex(col); } } });
 el('startVR').addEventListener('click',()=>{ enterVR(); });
 el('startPreview').addEventListener('click',()=>{
   el('menu').style.display='none'; el('hud2d').style.display='block'; el('back').style.display='block';
