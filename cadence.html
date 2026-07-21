@@ -203,10 +203,15 @@ const el = (id)=>document.getElementById(id);
 let audioCtx=null, decodedBuffer=null, beats=[], songDuration=0;
 let state='menu';
 let songStartTime=0, countdownEnd=0, lastCount=0;
-let score=0, combo=0, bestCombo=0, hitCount=0, missCount=0, sensitivity=0.5;
+let score=0, combo=0, bestCombo=0, hitCount=0, missCount=0, sensitivity=0.5, perfectCount=0;
 let weapon='pistols';             // pistols | swords | smg
 let sfxOn=true;                   // effets sonores
 let colorMatch=true;              // cibles associées à la couleur de la main
+
+/* Phase 1 : jauge de charge partagée + suivi des basses pour les vagues */
+let charge=0;                     // 0..1, commune aux deux mains (ultime câblé en Phase 2)
+let bassAvg=0, lastDrop=0;
+const addCharge=x=>{ charge=Math.min(1,charge+x); };
 
 const TRAVEL=1.9, HIT_Z=-0.55, SPAWN_Z=HIT_Z-9;
 const SMG_INTERVAL=0.09, HEAT_PER_SHOT=0.06, HEAT_COOL=0.35, HEAT_RESUME=0.3;
@@ -217,6 +222,12 @@ const SABER_BASE=0.10, SABER_LEN=0.72, TRAIL_SEG=16;
 const PALETTE=[0xff6a5c, 0x4fd6c8];
 const NEUTRAL_TARGET=0xffcf5c;    // couleur des cibles quand l'association est désactivée
 let swapColors=false;
+
+/* scoring & cibles spéciales */
+const HIT_BASE=60;                // score de base d'un coup (× grade × multiplicateur)
+const MALUS_PEN=250;              // pénalité si on tire sur un piège
+const BOOM_RADIUS=1.4;            // rayon de destruction de l'explosion large
+const T_MALUS=0xff2b4a, T_ENERGY=0x4fd6c8, T_BOOM=0xffa030;   // couleurs des types spéciaux
 
 /* difficulté de visée : 0 = très précis, 1 = très permissif */
 let hitAssist=0.5;
@@ -335,7 +346,7 @@ const targets=[], particles=[], floats=[], reactive=[];
 /* pools d'objets réutilisables : évitent d'allouer géométries/matériaux à chaque
    cible/particule/texte, principale source de saccades et de fuite mémoire GPU */
 const targetPool=[], particlePool=[], floatPool=[], floatTexCache=new Map();
-let TARGET_GEO=null, PARTICLE_GEO=null;
+let TARGET_GEO=null, PARTICLE_GEO=null, MALUS_GEO=null, ENERGY_GEO=null, BOOM_GEO=null;
 let hud,hudCtx,hudTex,hitRing,analyser,freqData,playSource=null,nextBeatIndex=0,started3D=false;
 let ringFlash=0, resultMesh,resultCtx,resultTex;
 
@@ -446,6 +457,9 @@ function init3D(){
   // géométries partagées par tous les objets poolés
   TARGET_GEO=new THREE.IcosahedronGeometry(0.16,0);
   PARTICLE_GEO=new THREE.SphereGeometry(0.025,6,6);
+  MALUS_GEO=new THREE.OctahedronGeometry(0.17,0);    // piège : octaèdre anguleux
+  ENERGY_GEO=new THREE.OctahedronGeometry(0.13,0);   // énergie : petit losange
+  BOOM_GEO=new THREE.IcosahedronGeometry(0.18,0);    // explosion large : orbe
 
   camera=new THREE.PerspectiveCamera(70,window.innerWidth/window.innerHeight,0.05,80);
   camera.position.set(0,1.5,2.2); camera.lookAt(0,1.3,-3);
@@ -581,6 +595,7 @@ function quitToMenu(){
 /* ===================== DÉROULÉ DE PARTIE ===================== */
 function startCountdown(){
   score=0;combo=0;bestCombo=0;hitCount=0;missCount=0;nextBeatIndex=0;
+  perfectCount=0;charge=0;bassAvg=0;lastDrop=0;
   clearTargets(); applyWeapon(); resultMesh.visible=false; hud.visible=true;
   ensureCtx(); lastCount=0; sfx.start();
   state='countdown'; countdownEnd=performance.now()+3000;
@@ -610,34 +625,67 @@ function songTimeNow(){ return audioCtx?audioCtx.currentTime-songStartTime:0; }
 function accuracy(){ const tot=hitCount+missCount; return tot>0?Math.round(100*hitCount/tot):0; }
 function rankFor(a){ if(a>=95)return['S',0xffcf5c]; if(a>=85)return['A',0x4fd6c8];
   if(a>=70)return['B',0x8ad07a]; if(a>=50)return['C',0xffa15c]; return['D',0xff5b5b]; }
+/* multiplicateur par paliers de combo, et note de précision rythmique */
+function comboMult(){ return combo>=32?8:combo>=16?4:combo>=8?2:1; }
+function gradeFor(p){ const d=Math.abs(1-p);
+  if(d<0.06) return {name:'PARFAIT',color:0xffcf5c,factor:1.0,charge:0.05};
+  if(d<0.14) return {name:'BIEN',   color:0x4fd6c8,factor:0.6,charge:0.03};
+  return              {name:'OK',    color:0x8f8ab0,factor:0.35,charge:0.02}; }
 
 /* ========================= CIBLES ========================= */
-function getTargetMesh(color){
-  let mesh=targetPool.pop();
-  if(!mesh) mesh=new THREE.Mesh(TARGET_GEO,
-    new THREE.MeshStandardMaterial({emissiveIntensity:.5,roughness:.3,metalness:.1}));
-  mesh.material.color.setHex(color); mesh.material.emissive.setHex(color);
+/* pools par type : chaque type a sa géométrie, on ne mélange donc pas les meshes */
+const MESH_POOLS={normal:targetPool, malus:[], energie:[], boom:[]};
+function targetGeo(type){ return type==='malus'?MALUS_GEO : type==='energie'?ENERGY_GEO : type==='boom'?BOOM_GEO : TARGET_GEO; }
+function getTargetMesh(type,color){
+  const pool=MESH_POOLS[type]||targetPool;
+  let mesh=pool.pop();
+  if(!mesh){
+    mesh=new THREE.Mesh(targetGeo(type),
+      new THREE.MeshStandardMaterial({emissiveIntensity:type==='normal'?.5:.85,roughness:.3,metalness:.15}));
+    mesh.userData.pool=pool;
+  }
+  if(type==='malus'){ mesh.material.color.setHex(0x140008); mesh.material.emissive.setHex(T_MALUS); }
+  else { mesh.material.color.setHex(color); mesh.material.emissive.setHex(color); }
+  mesh.scale.setScalar(type==='boom'?1.25:1);
   mesh.rotation.set(0,0,0); mesh.visible=true;
   if(!mesh.parent) scene.add(mesh);
   return mesh;
 }
-function releaseTargetMesh(mesh){ mesh.visible=false; targetPool.push(mesh); }
-function spawnTarget(beatTime,idx){
-  const lane=LANES[idx%LANES.length];
+function releaseTargetMesh(mesh){ mesh.visible=false; mesh.scale.setScalar(1); (mesh.userData.pool||targetPool).push(mesh); }
+function pickType(){
+  const r=Math.random();
+  if(r<0.06) return 'malus';      // piège à éviter
+  if(r<0.11) return 'energie';    // recharge d'ultime
+  if(r<0.14) return 'boom';       // explosion large (AoE)
+  return 'normal';
+}
+function spawnTarget(beatTime,idx,type){
+  const lane=LANES[idx%LANES.length], t=type||'normal';
   // couleur associée à une main, ou couleur neutre si l'association est désactivée
   const color = colorMatch ? PALETTE[idx%2] : NEUTRAL_TARGET;
-  const mesh=getTargetMesh(color);
+  const mesh=getTargetMesh(t,color);
   mesh.position.set(lane.x,lane.y,SPAWN_Z);
-  targets.push({mesh,beatTime,color,x:lane.x,y:lane.y,hit:false,dead:false});
+  targets.push({mesh,beatTime,color,x:lane.x,y:lane.y,hit:false,dead:false,type:t});
+}
+/* vague déclenchée sur un drop : ~6 cibles normales échelonnées, arrivant depuis le fond */
+function spawnWave(){
+  if(targets.length>40) return;
+  for(let i=0;i<6;i++) spawnTarget(songTimeNow()+TRAVEL+i*0.13, i%LANES.length, 'normal');
+  spawnFloat('DROP !',0xffcf5c,new THREE.Vector3(0,1.75,HIT_Z));
+  for(const r of reactive) r.mesh.material.emissiveIntensity=r.base*2.4;   // flash bref du décor
+  sfx.go();
 }
 function updateTargets(st){
-  while(nextBeatIndex<beats.length && beats[nextBeatIndex]-TRAVEL<=st){ spawnTarget(beats[nextBeatIndex],nextBeatIndex); nextBeatIndex++; }
+  while(nextBeatIndex<beats.length && beats[nextBeatIndex]-TRAVEL<=st){ spawnTarget(beats[nextBeatIndex],nextBeatIndex,pickType()); nextBeatIndex++; }
   for(const t of targets){
     if(t.dead) continue;
     const p=(st-(t.beatTime-TRAVEL))/TRAVEL;
     t.mesh.position.z=SPAWN_Z+(HIT_Z-SPAWN_Z)*p;
     t.mesh.rotation.x+=0.02; t.mesh.rotation.y+=0.03;
-    if(!t.hit && p>HIT_LATE){ onMiss(t); }
+    if(!t.hit && p>HIT_LATE){
+      if(t.type==='normal') onMiss(t);
+      else { t.dead=true; t.mesh.visible=false; }   // piège évité (ok) / bonus manqué : sans pénalité
+    }
   }
   for(let i=targets.length-1;i>=0;i--){ if(targets[i].dead){ releaseTargetMesh(targets[i].mesh); targets.splice(i,1); } }
 }
@@ -660,14 +708,14 @@ function fireShot(controller){          // pistolets + mitraillettes
   controller.userData.flash=performance.now()+70;
   let best=null,bestAng=AIM_CONE;
   for(const t of targets){
-    if(t.dead||t.hit||(colorMatch && t.color!==color)) continue;
+    if(t.dead||t.hit||(colorMatch && t.type==='normal' && t.color!==color)) continue;   // spéciales : toute main
     const p=(songTimeNow()-(t.beatTime-TRAVEL))/TRAVEL;
     if(p<HIT_EARLY||p>HIT_LATE) continue;
     _dir.copy(t.mesh.position).sub(_p).normalize();
     const ang=_fwd.angleTo(_dir);
     if(ang<bestAng){ bestAng=ang; best=t; }
   }
-  if(best){ hitTarget(best); haptic(controller,0.6,50); return true; }
+  if(best){ resolveHit(best); haptic(controller,0.6,50); return true; }
   return false;
 }
 
@@ -677,10 +725,10 @@ function meleeCheck(controller){        // épées : contact
   _a.set(0,SABER_BASE,0);           controller.localToWorld(_a);
   _b.set(0,SABER_BASE+SABER_LEN,0); controller.localToWorld(_b);
   for(const t of targets){
-    if(t.dead||t.hit||(colorMatch && t.color!==color)) continue;
+    if(t.dead||t.hit||(colorMatch && t.type==='normal' && t.color!==color)) continue;   // spéciales : toute main
     const p=(songTimeNow()-(t.beatTime-TRAVEL))/TRAVEL;
     if(p<HIT_EARLY||p>HIT_LATE) continue;
-    if(distToSegment(t.mesh.position,_a,_b)<SWORD_REACH){ hitTarget(t); haptic(controller,0.7,55); }
+    if(distToSegment(t.mesh.position,_a,_b)<SWORD_REACH){ resolveHit(t); haptic(controller,0.7,55); }
   }
 }
 function distToSegment(pt,a,b){
@@ -691,10 +739,53 @@ function distToSegment(pt,a,b){
   return _pt.distanceTo(pt);
 }
 
+function targetP(t){ return (songTimeNow()-(t.beatTime-TRAVEL))/TRAVEL; }
+// aiguille chaque coup vers le bon comportement selon le type de cible
+function resolveHit(t){
+  if(t.type==='malus')   return hitMalus(t);
+  if(t.type==='energie') return hitEnergy(t);
+  if(t.type==='boom')    return hitBoom(t);
+  return hitTarget(t);
+}
 function hitTarget(t){
   t.hit=true; t.dead=true; hitCount++; combo++; bestCombo=Math.max(bestCombo,combo);
-  score+=100+Math.min(combo,20)*10;
-  burst(t.mesh.position,t.mesh.material.color); t.mesh.visible=false; sfx.hit(combo); updateHudScore();
+  const g=gradeFor(targetP(t)), mult=comboMult();
+  score+=Math.round(HIT_BASE*g.factor*mult);
+  if(g.name==='PARFAIT') perfectCount++;
+  addCharge(g.charge);
+  burst(t.mesh.position,t.mesh.material.color); t.mesh.visible=false;
+  spawnFloat(g.name+' ×'+mult, g.color, t.mesh.position.clone().setY(t.y+0.18));
+  sfx.hit(combo); updateHudScore();
+}
+function hitMalus(t){
+  t.hit=true; t.dead=true; combo=0; missCount++;
+  score=Math.max(0,score-MALUS_PEN);
+  burst(t.mesh.position,new THREE.Color(T_MALUS)); t.mesh.visible=false;
+  spawnFloat('PIÈGE −'+MALUS_PEN, T_MALUS, t.mesh.position.clone().setY(t.y+0.18));
+  ringFlash=performance.now()+320; sfx.miss(); updateHudScore();
+}
+function hitEnergy(t){
+  t.hit=true; t.dead=true; hitCount++;
+  addCharge(0.25); score+=Math.round(HIT_BASE*comboMult());
+  burst(t.mesh.position,new THREE.Color(T_ENERGY)); t.mesh.visible=false;
+  spawnFloat('ÉNERGIE ⚡', T_ENERGY, t.mesh.position.clone().setY(t.y+0.18));
+  sfx.hit(combo); updateHudScore();
+}
+function hitBoom(t){
+  t.hit=true; t.dead=true; hitCount++; combo++; bestCombo=Math.max(bestCombo,combo);
+  const center=t.mesh.position.clone(); let cleared=0;
+  for(const o of targets){
+    if(o===t||o.dead||o.hit||o.type==='malus') continue;
+    if(o.mesh.position.distanceTo(center)<BOOM_RADIUS){
+      o.hit=true; o.dead=true; o.mesh.visible=false; hitCount++; cleared++;
+      burst(o.mesh.position,o.mesh.material.color);
+    }
+  }
+  score+=Math.round(HIT_BASE*comboMult()*(1+cleared));
+  addCharge(0.05+cleared*0.02);
+  burst(center,new THREE.Color(T_BOOM)); burst(center,new THREE.Color(0xffffff)); t.mesh.visible=false;
+  spawnFloat('BOOM ×'+(cleared+1), T_BOOM, center.clone().setY(t.y+0.18));
+  ringFlash=performance.now()+260; sfx.overheat(); updateHudScore();
 }
 function haptic(c,intensity,ms){ try{ c.userData.source?.gamepad?.hapticActuators?.[0]?.pulse(intensity,ms);}catch(e){} }
 
@@ -747,16 +838,25 @@ function updateFloats(dt){
 }
 
 /* ========================== HUD ========================== */
-function drawHud(l1,l2){
+function drawHud(l1,l2,gauge){
   hudCtx.clearRect(0,0,512,200);
   hudCtx.fillStyle='rgba(11,14,26,.72)'; roundRect(hudCtx,6,6,500,188,22); hudCtx.fill();
+  const withGauge = gauge!=null;
   hudCtx.textAlign='center'; hudCtx.fillStyle='#f2ede4'; hudCtx.font='600 62px Inter, sans-serif';
-  hudCtx.fillText(l1,256,96);
-  if(l2){ hudCtx.fillStyle='#8f8ab0'; hudCtx.font='500 24px "IBM Plex Mono", monospace'; hudCtx.fillText(l2,256,150); }
+  hudCtx.fillText(l1,256, withGauge?84:96);
+  if(l2){ hudCtx.fillStyle='#8f8ab0'; hudCtx.font='500 24px "IBM Plex Mono", monospace'; hudCtx.fillText(l2,256, withGauge?130:150); }
+  if(withGauge){
+    const x=40,y=156,w=432,h=15, full=gauge>=1;
+    hudCtx.fillStyle='rgba(255,255,255,.09)'; roundRect(hudCtx,x,y,w,h,8); hudCtx.fill();
+    hudCtx.fillStyle= full?'#ffcf5c':'#4fd6c8'; roundRect(hudCtx,x,y,Math.max(7,w*gauge),h,8); hudCtx.fill();
+    hudCtx.fillStyle= full?'#ffcf5c':'#8f8ab0'; hudCtx.font='500 17px "IBM Plex Mono", monospace';
+    hudCtx.fillText(full?'ULTIME PRÊT (bientôt)':'charge', 256, 187);
+  }
   hudTex.needsUpdate=true;
 }
-function updateHudScore(){ drawHud(String(score),'combo ×'+combo);
-  el('hudScore').textContent=score; el('hudCombo').textContent='combo ×'+combo; }
+function updateHudScore(){ const m=comboMult();
+  drawHud(String(score),'×'+m+'  ·  combo '+combo, charge);
+  el('hudScore').textContent=score; el('hudCombo').textContent='×'+m+' · combo '+combo; }
 function roundRect(c,x,y,w,h,r){ c.beginPath(); c.moveTo(x+r,y);
   c.arcTo(x+w,y,x+w,y+h,r); c.arcTo(x+w,y+h,x,y+h,r); c.arcTo(x,y+h,x,y,r); c.arcTo(x,y,x+w,y,r); c.closePath(); }
 
@@ -772,9 +872,9 @@ function drawResults(){
   c.textAlign='center';
   c.fillStyle='#'+rc.toString(16).padStart(6,'0'); c.font='700 150px Inter, sans-serif'; c.fillText(rank, 560, 175);
   c.textAlign='left';
-  const rows=[['précision', acc+' %'],['combo max', '×'+bestCombo],['cibles touchées', String(hitCount)],['ratées', String(missCount)]];
-  c.font='500 26px "IBM Plex Mono", monospace';
-  rows.forEach((r,i)=>{ const y=270+i*38;
+  const rows=[['précision', acc+' %'],['combo max', '×'+bestCombo],['parfaits', String(perfectCount)],['cibles touchées', String(hitCount)],['ratées', String(missCount)]];
+  c.font='500 24px "IBM Plex Mono", monospace';
+  rows.forEach((r,i)=>{ const y=262+i*34;
     c.fillStyle='#8f8ab0'; c.fillText(r[0], 50, y);
     c.fillStyle='#f2ede4'; c.textAlign='right'; c.fillText(r[1], 470, y); c.textAlign='left'; });
   c.fillStyle='#8f8ab0'; c.font='500 22px "IBM Plex Mono", monospace'; c.textAlign='center';
@@ -839,10 +939,13 @@ function loop(){
     if(st>songDuration+1.5) finish();
   }
 
-  // réactivité basses
+  // réactivité basses + détection de drop → vague
   let bass=0;
   if(state==='playing' && analyser){ analyser.getByteFrequencyData(freqData);
-    for(let i=0;i<6;i++) bass+=freqData[i]; bass/=6*255; }
+    for(let i=0;i<6;i++) bass+=freqData[i]; bass/=6*255;
+    if(bass>bassAvg*1.6 && bass>0.5 && now-lastDrop>4000 && targets.length<40){ lastDrop=now; spawnWave(); }
+    bassAvg=bassAvg*0.95+bass*0.05;
+  }
   for(const r of reactive){ r.mesh.material.emissiveIntensity=r.base*(0.55+bass*1.7); }
   hitRing.material.opacity=0.25+bass*0.5;
   hitRing.material.color.setHex(now<ringFlash?0xff3b3b:0xffcf5c);
@@ -876,7 +979,7 @@ function onDesktopClick(){
     for(const t of targets){ if(t.dead||t.hit)continue;
       const p=(songTimeNow()-(t.beatTime-TRAVEL))/TRAVEL;
       if(p<HIT_EARLY||p>HIT_LATE)continue; if(Math.abs(1-p)<Math.abs(1-bp)){bp=p;best=t;} }
-    if(best) hitTarget(best);
+    if(best) resolveHit(best);
   }
 }
 function onKey(e){
