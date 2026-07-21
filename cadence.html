@@ -225,7 +225,6 @@ let swapColors=false;
 
 /* scoring & cibles spéciales */
 const MALUS_PEN=250;              // pénalité si on tire sur un piège
-const BOOM_RADIUS=1.4;            // rayon de destruction de l'explosion large
 const T_MALUS=0xff1150, T_ENERGY=0x8b5cff, T_BOOM=0xff9500;   // rouge vif / violet / orange vif — distincts du corail-cyan des cibles normales
 
 /* difficulté de visée : 0 = très précis, 1 = très permissif */
@@ -666,9 +665,9 @@ function getTargetMesh(type,color){
 function releaseTargetMesh(mesh){ mesh.visible=false; mesh.scale.setScalar(1); (mesh.userData.pool||targetPool).push(mesh); }
 function pickType(){
   const r=Math.random();
-  if(r<0.09) return 'malus';      // piège à éviter (9 %)
-  if(r<0.19) return 'energie';    // recharge d'ultime (10 %)
-  if(r<0.25) return 'boom';       // explosion large / AoE (6 %)
+  if(r<0.09) return 'malus';                              // piège à éviter (9 %)
+  if(r<0.19) return charge>=1 ? 'normal' : 'energie';     // énergie (10 %) — inutile si la jauge est pleine
+  if(r<0.22) return 'boom';                               // bombe / AoE (3 %)
   return 'normal';
 }
 function spawnTarget(beatTime,idx,type){
@@ -784,12 +783,12 @@ function hitEnergy(t){
 function hitBoom(t){
   t.hit=true; t.dead=true; hitCount++; combo++; bestCombo=Math.max(bestCombo,combo);
   const center=t.mesh.position.clone(); let cleared=0;
+  // la bombe fait exploser TOUTES les cibles à l'écran, pièges compris
   for(const o of targets){
-    if(o===t||o.dead||o.hit||o.type==='malus') continue;
-    if(o.mesh.position.distanceTo(center)<BOOM_RADIUS){
-      o.hit=true; o.dead=true; o.mesh.visible=false; hitCount++; cleared++;
-      burst(o.mesh.position,o.mesh.material.color);
-    }
+    if(o===t||o.dead||o.hit) continue;
+    o.hit=true; o.dead=true; o.mesh.visible=false; cleared++;
+    if(o.type!=='malus') hitCount++;   // un piège nettoyé n'est pas une cible « touchée » et ne pénalise pas
+    burst(o.mesh.position,o.mesh.material.emissive);
   }
   score+=comboBonus()*(1+cleared);
   addCharge(0.05+cleared*0.02);
