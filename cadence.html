@@ -36,64 +36,77 @@
     background:linear-gradient(92deg,var(--coral),var(--gold) 55%,var(--cyan));
     -webkit-background-clip:text;background-clip:text;color:transparent}
   .tagline{color:var(--muted);font-size:15px;margin-bottom:24px}
-  .drop{border:1.5px dashed var(--line);border-radius:14px;padding:20px;text-align:center;
-    cursor:pointer;transition:border-color .2s,background .2s;background:rgba(255,255,255,.02)}
+  /* ---- chargement du son ---- */
+  .drop{display:flex;align-items:center;gap:14px;border:1.5px dashed var(--line);border-radius:14px;
+    padding:13px 16px;cursor:pointer;transition:border-color .2s,background .2s;background:rgba(255,255,255,.02)}
   .drop:hover,.drop.over{border-color:var(--cyan);background:rgba(79,214,200,.06)}
-  .drop strong{color:var(--ink);font-weight:600}
-  .drop span{color:var(--muted);font-size:13px}
+  .drop .di{font-size:26px;line-height:1;flex:none}
+  .drop .dt{display:flex;flex-direction:column;line-height:1.25}
+  .drop .dt strong{color:var(--ink);font-weight:600;font-size:15px}
+  .drop .dt em{font-style:normal;color:var(--muted);font-size:11.5px;font-family:"IBM Plex Mono",monospace}
   #file{display:none}
-  .viz{margin:16px 0 4px;height:80px;width:100%;border-radius:12px;
+  .viz{margin:12px 0 6px;height:54px;width:100%;border-radius:12px;
     background:rgba(0,0,0,.25);border:1px solid var(--line)}
-  .status{font-family:"IBM Plex Mono",monospace;font-size:12.5px;color:var(--muted);
-    min-height:20px;display:flex;gap:8px;align-items:center}
+  .status{font-family:"IBM Plex Mono",monospace;font-size:12px;color:var(--muted);
+    min-height:18px;display:flex;gap:8px;align-items:center}
   .dot{width:7px;height:7px;border-radius:50%;background:var(--muted);flex:none}
   .dot.ok{background:var(--cyan);box-shadow:0 0 10px var(--cyan)}
   .dot.busy{background:var(--gold);animation:pulse 1s infinite}
   @keyframes pulse{50%{opacity:.35}}
 
-  .seclabel{font-family:"IBM Plex Mono",monospace;font-size:10.5px;letter-spacing:.2em;
-    text-transform:uppercase;color:var(--muted);margin:22px 0 10px}
-  .weapons{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
-  .wpn{cursor:pointer;text-align:left;border:1px solid var(--line);border-radius:14px;
-    padding:14px 14px 13px;background:rgba(255,255,255,.02);color:var(--ink);
-    transition:border-color .18s,background .18s,transform .12s;display:flex;flex-direction:column;gap:5px}
-  .wpn:hover{transform:translateY(-1px)}
-  .wpn .ic{font-size:22px;line-height:1}
-  .wpn b{font-size:14px;font-weight:600}
-  .wpn span{font-family:"IBM Plex Mono",monospace;font-size:10.5px;color:var(--muted);line-height:1.4}
-  .wpn.selected{border-color:var(--cyan);background:rgba(79,214,200,.08);
-    box-shadow:0 0 0 1px var(--cyan) inset}
+  /* ---- armes : grosses icônes ---- */
+  .weapons{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:20px}
+  .wpn{cursor:pointer;border:1px solid var(--line);border-radius:16px;padding:16px 8px 12px;
+    background:rgba(255,255,255,.02);color:var(--ink);display:flex;flex-direction:column;
+    align-items:center;gap:8px;transition:border-color .18s,background .18s,transform .12s,box-shadow .18s}
+  .wpn:hover{transform:translateY(-2px);border-color:var(--cyan)}
+  .wpn .ic{font-size:34px;line-height:1;filter:drop-shadow(0 3px 8px rgba(0,0,0,.55))}
+  .wpn b{font-size:12.5px;font-weight:600;letter-spacing:.01em}
+  .wpn.selected{border-color:var(--cyan);background:rgba(79,214,200,.1);
+    box-shadow:0 0 0 1px var(--cyan) inset,0 0 22px rgba(79,214,200,.2)}
 
-  .legend{display:flex;gap:20px;align-items:center;margin-top:20px;
+  /* ---- mains / couleurs ---- */
+  .legend{display:flex;gap:10px;align-items:center;margin-top:14px;
     font-family:"IBM Plex Mono",monospace;font-size:12px;color:var(--muted)}
-  .legend i{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:7px;vertical-align:middle}
+  .legend .pill{display:flex;align-items:center;gap:8px;padding:7px 12px;border:1px solid var(--line);border-radius:999px}
+  .legend i{display:inline-block;width:11px;height:11px;border-radius:50%}
   #swap{margin-left:auto;background:transparent;border:1px solid var(--line);color:var(--ink);
-    font-family:"IBM Plex Mono",monospace;font-size:11px;border-radius:8px;padding:6px 11px;cursor:pointer}
-  #swap:hover{border-color:var(--cyan)}
-  .row{display:flex;align-items:center;gap:16px;margin-top:18px}
-  .row label{font-family:"IBM Plex Mono",monospace;font-size:11px;letter-spacing:.15em;
-    text-transform:uppercase;color:var(--muted);white-space:nowrap}
-  input[type=range]{flex:1;accent-color:var(--coral);height:4px}
-  .actions{display:flex;gap:12px;margin-top:24px;flex-wrap:wrap}
-  button.cta{flex:1;min-width:160px;cursor:pointer;font-family:"Inter",sans-serif;
-    font-weight:600;font-size:15px;color:#120c1e;border:none;border-radius:12px;
-    padding:16px 20px;background:linear-gradient(92deg,var(--coral),var(--gold));
+    font-size:16px;line-height:1;border-radius:10px;padding:8px 13px;cursor:pointer;
+    transition:border-color .18s,transform .25s}
+  #swap:hover{border-color:var(--cyan);transform:rotate(180deg)}
+
+  /* ---- réglages : sliders à icône ---- */
+  .sliders{display:flex;flex-direction:column;gap:11px;margin-top:18px}
+  .slider{display:flex;align-items:center;gap:13px}
+  .slider .si{font-size:19px;width:24px;text-align:center;flex:none}
+  input[type=range]{flex:1;accent-color:var(--coral);height:4px;cursor:pointer}
+
+  /* ---- bascules compactes ---- */
+  .chips{display:flex;gap:10px;margin-top:13px}
+  .chip{flex:1;display:flex;align-items:center;justify-content:center;gap:8px;cursor:pointer;
+    border:1px solid var(--line);border-radius:12px;padding:11px 12px;background:rgba(255,255,255,.02);
+    color:var(--ink);font-family:"Inter",sans-serif;font-size:13px;font-weight:600;
+    transition:border-color .18s,background .18s,opacity .18s}
+  .chip .ci{font-size:17px;line-height:1}
+  .chip.on{border-color:var(--cyan);background:rgba(79,214,200,.08);box-shadow:0 0 0 1px var(--cyan) inset}
+  .chip.off{opacity:.5}
+
+  /* ---- actions ---- */
+  .actions{display:flex;gap:12px;margin-top:20px;flex-wrap:wrap}
+  button.cta{flex:1;min-width:150px;cursor:pointer;font-family:"Inter",sans-serif;
+    font-weight:700;font-size:15px;color:#120c1e;border:none;border-radius:12px;
+    padding:16px 18px;background:linear-gradient(92deg,var(--coral),var(--gold));
+    display:flex;align-items:center;justify-content:center;gap:9px;
     transition:transform .12s,filter .2s,opacity .2s}
+  button.cta .bi{font-size:19px}
   button.cta.ghost{background:transparent;color:var(--ink);border:1px solid var(--line)}
   button.cta:hover:not(:disabled){transform:translateY(-1px);filter:brightness(1.05)}
   button.cta:disabled{opacity:.4;cursor:not-allowed}
-  .hint{font-family:"IBM Plex Mono",monospace;font-size:11.5px;color:var(--muted);
-    margin-top:16px;line-height:1.7}
-  .hint b{color:var(--cyan);font-weight:500}
-  .toggles{display:flex;gap:10px;flex-wrap:wrap;margin-top:16px}
-  .tgl{flex:1;min-width:200px;background:rgba(255,255,255,.02);border:1px solid var(--line);color:var(--ink);
-    font-family:"IBM Plex Mono",monospace;font-size:11.5px;border-radius:10px;padding:12px 13px;cursor:pointer;
-    transition:border-color .18s,background .18s,opacity .18s;text-align:left;line-height:1.4}
-  .tgl:hover{border-color:var(--cyan)}
-  .tgl.on{border-color:var(--cyan);background:rgba(79,214,200,.08);box-shadow:0 0 0 1px var(--cyan) inset}
-  .tgl.off{opacity:.6}
-  .tgl b{display:block;font-weight:600;font-size:12.5px;font-family:"Inter",sans-serif;color:var(--ink);margin-bottom:2px}
-  .tgl .val{color:var(--cyan)}
+
+  /* ---- rappel des touches ---- */
+  .keys{display:flex;flex-wrap:wrap;gap:8px;margin-top:16px}
+  .keys span{font-family:"IBM Plex Mono",monospace;font-size:11px;color:var(--muted);
+    border:1px solid var(--line);border-radius:8px;padding:6px 10px}
   #hud2d{position:fixed;top:20px;left:20px;z-index:9;font-family:"IBM Plex Mono",monospace;
     color:var(--ink);display:none;text-shadow:0 2px 10px rgba(0,0,0,.6)}
   #hud2d .sc{font-size:34px;font-weight:500}
@@ -107,69 +120,66 @@
 
 <div id="menu">
   <div class="card">
-    <div class="eyebrow">webxr · meta quest · rythme</div>
+    <div class="eyebrow">🥽 meta quest · rythme</div>
     <h1>CADENCE</h1>
-    <p class="tagline">Charge ta musique, choisis ton arme, frappe au tempo.</p>
 
-    <label class="drop" id="drop" for="file">
-      <div><strong>Charger une musique</strong></div>
-      <span>MP3, WAV, OGG… ou glisse un fichier ici</span>
+    <label class="drop" id="drop" for="file" title="MP3, WAV, OGG — ou glisse un fichier">
+      <span class="di">🎵</span>
+      <span class="dt"><strong>Charger un son</strong><em>ou glisse-le ici</em></span>
     </label>
     <input id="file" type="file" accept="audio/*" />
 
     <canvas class="viz" id="viz" width="1120" height="160"></canvas>
     <div class="status"><span class="dot" id="dot"></span><span id="status">En attente d'une piste.</span></div>
 
-    <div class="seclabel">Arme</div>
     <div class="weapons">
-      <button class="wpn selected" data-w="pistols">
-        <span class="ic">🔫</span><b>Pistolets</b><span>tir précis · un coup par gâchette</span>
+      <button class="wpn selected" data-w="pistols" title="Tir précis · un coup par gâchette">
+        <span class="ic">🔫</span><b>Pistolets</b>
       </button>
-      <button class="wpn" data-w="swords">
-        <span class="ic">🗡️</span><b>Sabres laser</b><span>tranche les cibles · laisse une traînée</span>
+      <button class="wpn" data-w="swords" title="Sabres laser · tranche au contact, laisse une traînée">
+        <span class="ic">🗡️</span><b>Sabres</b>
       </button>
-      <button class="wpn" data-w="smg">
-        <span class="ic">💥</span><b>Mitraillettes</b><span>tir continu · gère la surchauffe</span>
+      <button class="wpn" data-w="smg" title="Tir continu · gère la surchauffe">
+        <span class="ic">💥</span><b>Mitraillette</b>
       </button>
     </div>
 
     <div class="legend">
-      <span id="legLeft"><i style="background:#ff6a5c"></i>main gauche</span>
-      <span id="legRight"><i style="background:#4fd6c8"></i>main droite</span>
-      <button id="swap">inverser ⇄</button>
+      <span class="pill" id="legLeft" title="main gauche">✋<i></i></span>
+      <span class="pill" id="legRight" title="main droite">🤚<i></i></span>
+      <button id="swap" title="Inverser les mains">⇄</button>
     </div>
 
-    <div class="row">
-      <label for="dens">Densité des cibles</label>
-      <input type="range" id="dens" min="0" max="1" step="0.05" value="0.5" />
+    <div class="sliders">
+      <div class="slider" title="Densité des cibles">
+        <span class="si">🎯</span>
+        <input type="range" id="dens" min="0" max="1" step="0.05" value="0.5" />
+      </div>
+      <div class="slider" title="Facilité de visée : précis → permissif">
+        <span class="si">🧲</span>
+        <input type="range" id="assist" min="0" max="1" step="0.05" value="0.5" />
+      </div>
     </div>
 
-    <div class="row">
-      <label for="assist">Facilité de visée</label>
-      <input type="range" id="assist" min="0" max="1" step="0.05" value="0.5" />
-    </div>
-
-    <div class="toggles">
-      <button class="tgl on" id="colorMatch">
-        <b>Association des couleurs</b>
-        <span>touche chaque cible avec la main de sa couleur · <span class="val" id="cmState">ON</span></span>
+    <div class="chips">
+      <button class="chip on" id="colorMatch" title="Associer chaque cible à la couleur de la main">
+        <span class="ci">🎨</span>Couleurs
       </button>
-      <button class="tgl on" id="soundBtn">
-        <b>Sons</b>
-        <span>effets de tir, impacts et décompte · <span class="val" id="sndState">ON</span></span>
+      <button class="chip on" id="soundBtn" title="Effets sonores">
+        <span class="ci" id="sndIcon">🔊</span>Sons
       </button>
     </div>
 
     <div class="actions">
-      <button class="cta" id="startVR" disabled>Entrer en VR</button>
-      <button class="cta ghost" id="startPreview" disabled>Aperçu bureau</button>
+      <button class="cta" id="startVR" disabled><span class="bi">🥽</span>Jouer en VR</button>
+      <button class="cta ghost" id="startPreview" disabled><span class="bi">🖥️</span>Bureau</button>
     </div>
 
-    <p class="hint">
-      En VR : <b>gâchette</b> pour lancer · <b>B</b> pause · <b>B</b> encore (en pause) : quitter.<br>
-      Pistolets/Mitraillettes : vise et tire la couleur de ta main. Sabres : tranche les cibles.<br>
-      Bureau (test) : <b>clic</b> tir · <b>P</b> pause · <b>Échap</b> quitter.
-    </p>
+    <div class="keys">
+      <span title="Gâchette : lancer / tirer">🎯 gâchette</span>
+      <span title="B : pause, puis quitter">⏸️ B</span>
+      <span title="Bureau : clic tir · P pause · Échap quitter">🖱️ clic · P · Échap</span>
+    </div>
   </div>
 </div>
 
@@ -877,8 +887,11 @@ function onKey(e){
 
 /* ========================= MENU UI ========================= */
 function refreshLegend(){
-  el('legLeft').querySelector('i').style.background='#'+handColor('left').toString(16).padStart(6,'0');
-  el('legRight').querySelector('i').style.background='#'+handColor('right').toString(16).padStart(6,'0');
+  const L='#'+handColor('left').toString(16).padStart(6,'0');
+  const R='#'+handColor('right').toString(16).padStart(6,'0');
+  const li=el('legLeft').querySelector('i'), ri=el('legRight').querySelector('i');
+  li.style.background=L; li.style.boxShadow='0 0 8px '+L;
+  ri.style.background=R; ri.style.boxShadow='0 0 8px '+R;
 }
 el('file').addEventListener('change',e=>{ if(e.target.files[0]) loadFile(e.target.files[0]); });
 const drop=el('drop');
@@ -896,14 +909,13 @@ el('colorMatch').addEventListener('click',()=>{
   colorMatch=!colorMatch;
   const b=el('colorMatch');
   b.classList.toggle('on',colorMatch); b.classList.toggle('off',!colorMatch);
-  el('cmState').textContent=colorMatch?'ON':'OFF';
-  el('swap').style.opacity=colorMatch?'1':'.4';   // inverser n'a de sens qu'avec l'association active
+  el('swap').style.opacity=colorMatch?'1':'.35';   // inverser n'a de sens qu'avec l'association active
 });
 el('soundBtn').addEventListener('click',()=>{
   sfxOn=!sfxOn;
   const b=el('soundBtn');
   b.classList.toggle('on',sfxOn); b.classList.toggle('off',!sfxOn);
-  el('sndState').textContent=sfxOn?'ON':'OFF';
+  el('sndIcon').textContent=sfxOn?'🔊':'🔇';
   if(sfxOn) sfx.tick();   // petit retour audible à l'activation
 });
 document.querySelectorAll('.wpn').forEach(btn=>btn.addEventListener('click',()=>{
