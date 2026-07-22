@@ -142,6 +142,15 @@
       <button class="wpn" data-w="smg" title="Tir continu · gère la surchauffe">
         <span class="ic">💥</span><b>Mitraillette</b>
       </button>
+      <button class="wpn" data-w="fists" title="Poings · frappe au corps · ondes de choc en ultime">
+        <span class="ic">🥊</span><b>Poings</b>
+      </button>
+      <button class="wpn" data-w="fireball" title="Boules de feu · projectiles lancés à la main · colonnes de feu en ultime">
+        <span class="ic">🔥</span><b>Boules de feu</b>
+      </button>
+      <button class="wpn" data-w="laser" title="Laser continu · gère la surchauffe · faisceau géant en ultime">
+        <span class="ic">🔆</span><b>Laser</b>
+      </button>
     </div>
 
     <div class="legend">
@@ -219,6 +228,11 @@ let ultActive=false, ultEnd=0, ultWeapon=null, lastUltHud=0, bothTrigPrev=false;
 const ULT_DURATION=9000;          // durée d'un ultime (ms)
 const ULT_GRENADE_RADIUS=1.7;     // rayon d'explosion des grenades (ultime pistolets)
 const SABER_ULT_REACH=2.2, SABER_ULT_LEN=1.5;   // portée / longueur x pendant l'ultime sabre
+/* nouvelles armes (Phase 3) */
+const FIREBALL_SPEED=8, FIREBALL_R=0.30, FIREBALL_LIFE=1.7;   // boules de feu (projectiles)
+const PUNCH_SPEED=1.7, PUNCH_REACH=0.42;                      // poings (détection par vitesse)
+const LASER_HIT_R=0.32, LASER_HEAT_PER=0.02;                  // laser continu (+ surchauffe)
+const SHOCK_SPEED=7, SHOCK_LIFE=0.85, SHOCK_R=1.1;            // ondes de choc (ultime poings)
 
 const TRAVEL=1.9, HIT_Z=-0.55, SPAWN_Z=HIT_Z-9;
 const SMG_INTERVAL=0.09, HEAT_PER_SHOT=0.06, HEAT_COOL=0.35, HEAT_RESUME=0.3;
@@ -353,6 +367,9 @@ const targets=[], particles=[], floats=[], reactive=[];
    cible/particule/texte, principale source de saccades et de fuite mémoire GPU */
 const targetPool=[], particlePool=[], floatPool=[], floatTexCache=new Map();
 let TARGET_GEO=null, PARTICLE_GEO=null, MALUS_GEO=null, ENERGY_GEO=null, BOOM_GEO=null;
+/* Phase 3 : projectiles (boules de feu), ondes de choc (poings), colonnes de feu (ult boules) */
+const projectiles=[], shockwaves=[], fireColumns=[], fireballPool=[], shockPool=[];
+let FIREBALL_GEO=null, FIREBALL_GLOW_GEO=null, SHOCK_GEO=null, FIRECOL_GEO=null, bigBeam=null;
 let hud,hudCtx,hudTex,hitRing,analyser,freqData,playSource=null,nextBeatIndex=0,started3D=false;
 let ringFlash=0, resultMesh,resultCtx,resultTex;
 
@@ -413,7 +430,33 @@ function makeWeapons(color){
   const heatFill=new THREE.Mesh(fillGeo,new THREE.MeshBasicMaterial({color:0x4fd6c8}));
   heatFill.position.set(-0.06,0.06,0.021); heatFill.scale.x=0.001;
 
-  return {pistol,smg,sword,laser,heatBg,heatFill,colored:[pBarrel,sBarrel,glow,tipGlow],sBarrel};
+  // Poings (body-boxe) : gant coloré au niveau de la main
+  const glove=new THREE.Mesh(new THREE.IcosahedronGeometry(0.06,1),
+    new THREE.MeshStandardMaterial({color,emissive:color,emissiveIntensity:.35,roughness:.5,metalness:.1}));
+  glove.position.set(0,0,0.01);
+  const cuff=new THREE.Mesh(new THREE.CylinderGeometry(0.035,0.042,0.05,12),new THREE.MeshStandardMaterial({color:0x201a30}));
+  cuff.rotation.x=Math.PI/2; cuff.position.set(0,0,0.06); glove.add(cuff);
+
+  // Boules de feu : orbe incandescent tenu dans la main
+  const fball=new THREE.Group();
+  fball.add(new THREE.Mesh(new THREE.SphereGeometry(0.03,12,10),new THREE.MeshBasicMaterial({color:0xffe08a})));
+  fball.add(new THREE.Mesh(new THREE.SphereGeometry(0.055,12,10),
+    new THREE.MeshBasicMaterial({color:0xff7a1a,transparent:true,opacity:0.5,blending:THREE.AdditiveBlending,depthWrite:false})));
+  fball.position.set(0,0.01,-0.03);
+
+  // Laser continu : émetteur + faisceau (masqué hors tir)
+  const lgun=new THREE.Group();
+  const lemit=new THREE.Mesh(new THREE.BoxGeometry(0.04,0.04,0.1),new THREE.MeshStandardMaterial({color:0x241f38,roughness:.5}));
+  lemit.position.set(0,0.01,-0.03); lgun.add(lemit);
+  const beam=new THREE.Mesh(new THREE.CylinderGeometry(0.02,0.02,9,10),
+    new THREE.MeshBasicMaterial({color,transparent:true,opacity:0.5,blending:THREE.AdditiveBlending,depthWrite:false}));
+  beam.rotation.x=Math.PI/2; beam.position.set(0,0.01,-4.5); beam.visible=false; lgun.add(beam);
+  const beamCore=new THREE.Mesh(new THREE.CylinderGeometry(0.007,0.007,9,8),
+    new THREE.MeshBasicMaterial({color:0xffffff,transparent:true,opacity:0.9,depthWrite:false}));
+  beamCore.rotation.x=Math.PI/2; beamCore.position.set(0,0.01,-4.5); beamCore.visible=false; lgun.add(beamCore);
+
+  return {pistol,smg,sword,laser,heatBg,heatFill,glove,fball,lgun,beam,beamCore,
+    colored:[pBarrel,sBarrel,glow,tipGlow,glove,beam],sBarrel};
 }
 
 /* Traînée du sabre : ruban entre la base et la pointe de la lame, échantillonné
@@ -468,6 +511,14 @@ function init3D(){
   MALUS_GEO=new THREE.OctahedronGeometry(0.17,0);    // piège : octaèdre anguleux
   ENERGY_GEO=new THREE.OctahedronGeometry(0.13,0);   // énergie : petit losange
   BOOM_GEO=new THREE.IcosahedronGeometry(0.18,0);    // explosion large : orbe
+  FIREBALL_GEO=new THREE.SphereGeometry(0.05,10,8);
+  FIREBALL_GLOW_GEO=new THREE.SphereGeometry(0.10,10,8);
+  SHOCK_GEO=new THREE.TorusGeometry(0.35,0.06,8,24);
+  FIRECOL_GEO=new THREE.CylinderGeometry(0.28,0.34,2.4,14,1,true);
+  // faisceau laser central géant (ultime laser)
+  bigBeam=new THREE.Mesh(new THREE.CylinderGeometry(0.55,0.55,20,20,1,true),
+    new THREE.MeshBasicMaterial({color:0xff5ad6,transparent:true,opacity:0.32,blending:THREE.AdditiveBlending,depthWrite:false,side:THREE.DoubleSide}));
+  bigBeam.rotation.x=Math.PI/2; bigBeam.position.set(0,1.3,HIT_Z-6); bigBeam.visible=false; scene.add(bigBeam);
 
   camera=new THREE.PerspectiveCamera(70,window.innerWidth/window.innerHeight,0.05,80);
   camera.position.set(0,1.5,2.2); camera.lookAt(0,1.3,-3);
@@ -486,6 +537,7 @@ function init3D(){
     c.userData={prevB:false,prevA:false,flash:0,color:0xffffff,source:null,firing:false,heat:0,overheated:false,lastShot:0};
     const parts=makeWeapons(0xffffff);
     c.add(parts.pistol); c.add(parts.smg); c.add(parts.sword);
+    c.add(parts.glove); c.add(parts.fball); c.add(parts.lgun);
     c.add(parts.laser); c.add(parts.heatBg); c.add(parts.heatFill);
     c.userData.parts=parts;
     c.addEventListener('connected',(e)=>{
@@ -531,10 +583,14 @@ function applyWeapon(){
     p.smg.visible    = weapon==='smg';
     p.sword.visible  = weapon==='swords';
     p.sword.scale.set(1,1,1);   // annule un éventuel agrandissement d'ultime
-    p.laser.visible  = weapon!=='swords';
-    const heat = weapon==='smg';
+    p.glove.visible  = weapon==='fists';
+    p.fball.visible  = weapon==='fireball';
+    p.lgun.visible   = weapon==='laser';
+    p.beam.visible=false; p.beamCore.visible=false;
+    p.laser.visible  = weapon==='pistols'||weapon==='smg'||weapon==='fireball';   // viseur des armes à distance
+    const heat = weapon==='smg'||weapon==='laser';
     p.heatBg.visible=heat; p.heatFill.visible=heat;
-    c.userData.heat=0; c.userData.overheated=false; c.userData.firing=false;
+    c.userData.heat=0; c.userData.overheated=false; c.userData.firing=false; c.userData.prevPos=null;
     if(c.userData.trail){ c.userData.trail.samples.length=0; c.userData.trail.mesh.visible=false; }
   }
 }
@@ -605,7 +661,7 @@ function quitToMenu(){
 function startCountdown(){
   score=0;combo=0;bestCombo=0;hitCount=0;missCount=0;nextBeatIndex=0;
   charge=0;bassAvg=0;lastDrop=0; ultActive=false; ultWeapon=null;
-  clearTargets(); applyWeapon(); resultMesh.visible=false; hud.visible=true;
+  clearTargets(); clearPhase3(); applyWeapon(); resultMesh.visible=false; hud.visible=true;
   ensureCtx(); lastCount=0; sfx.start();
   state='countdown'; countdownEnd=performance.now()+3000;
 }
@@ -820,11 +876,13 @@ function activateUltimate(){
   if(state!=='playing' || charge<1 || ultActive) return;
   ultActive=true; ultWeapon=weapon; ultEnd=performance.now()+ULT_DURATION; charge=0;
   applyUltimateVisual(true);
+  if(ultWeapon==='fireball') spawnFireColumns();
   _pt.copy(_camPos).addScaledVector(_cf,1.7); _pt.y+=0.25; spawnFloat('ULTIME !',0xffcf5c,_pt);
   for(const c of controllers) haptic(c,1.0,140);
   sfx.go(); updateHudScore();
 }
 function endUltimate(){
+  clearFireColumns();
   ultActive=false; ultWeapon=null; applyUltimateVisual(false);
   for(const c of controllers){ c.userData.heat=0; c.userData.overheated=false; }
   updateHudScore();
@@ -832,6 +890,7 @@ function endUltimate(){
 function applyUltimateVisual(on){
   const saber = on && ultWeapon==='swords';
   for(const c of controllers){ const p=c.userData.parts; if(p&&p.sword) p.sword.scale.set(saber?1.3:1, saber?SABER_ULT_LEN:1, saber?1.3:1); }
+  if(bigBeam) bigBeam.visible = on && ultWeapon==='laser';
 }
 /* grenade (ultime pistolets) : explosion de zone autour du point d'impact */
 function grenadeExplode(center){
@@ -847,6 +906,126 @@ function grenadeExplode(center){
   if(cleared) score+=comboBonus()*cleared;
   burst(center,new THREE.Color(0xffa030)); burst(center,new THREE.Color(0xffffff));
   ringFlash=performance.now()+180; updateHudScore();
+}
+
+/* ==================== ARMES PHASE 3 ==================== */
+const _forwardZ=new THREE.Vector3(0,0,1);
+
+/* Boules de feu : projectile lancé depuis la main, explose à l'impact */
+function throwFireball(origin,dir){
+  let m=fireballPool.pop();
+  if(!m){ m=new THREE.Mesh(FIREBALL_GEO,new THREE.MeshBasicMaterial({color:0xffcf6a}));
+    m.add(new THREE.Mesh(FIREBALL_GLOW_GEO,new THREE.MeshBasicMaterial({color:0xff5a00,transparent:true,opacity:0.55,blending:THREE.AdditiveBlending,depthWrite:false}))); }
+  m.visible=true; m.position.copy(origin); if(!m.parent) scene.add(m);
+  projectiles.push({mesh:m,vx:dir.x*FIREBALL_SPEED,vy:dir.y*FIREBALL_SPEED,vz:dir.z*FIREBALL_SPEED,life:FIREBALL_LIFE});
+  sfx.tick();
+}
+function updateProjectiles(dt){
+  for(let i=projectiles.length-1;i>=0;i--){
+    const pr=projectiles[i]; pr.life-=dt;
+    pr.mesh.position.x+=pr.vx*dt; pr.mesh.position.y+=pr.vy*dt; pr.mesh.position.z+=pr.vz*dt;
+    let hitT=null;
+    for(const t of targets){ if(t.dead||t.hit) continue;
+      if(t.mesh.position.distanceTo(pr.mesh.position)<FIREBALL_R){ hitT=t; break; } }
+    if(hitT){ burst(pr.mesh.position,new THREE.Color(0xff7a1a)); resolveHit(hitT); pr.life=0; }
+    if(pr.life<=0 || pr.mesh.position.z<SPAWN_Z-1){ pr.mesh.visible=false; fireballPool.push(pr.mesh); projectiles.splice(i,1); }
+  }
+}
+
+/* Poings : coup détecté par la vitesse de la main + proximité d'une cible */
+function punchCheck(c,dt){
+  c.getWorldPosition(_p);
+  let pp=c.userData.prevPos; if(!pp){ c.userData.prevPos=_p.clone(); return; }
+  _dir.copy(_p).sub(pp); const speed=_dir.length()/Math.max(dt,0.001); pp.copy(_p);
+  if(speed<PUNCH_SPEED) return;
+  _dir.normalize(); let hit=false;
+  for(const t of targets){ if(t.dead||t.hit) continue;
+    if(t.mesh.position.distanceTo(_p)<PUNCH_REACH){
+      const p=(songTimeNow()-(t.beatTime-TRAVEL))/TRAVEL;
+      if(p<HIT_EARLY||p>HIT_LATE) continue;
+      resolveHit(t); hit=true; }
+  }
+  if(hit){ haptic(c,0.8,60); if(ultActive&&ultWeapon==='fists') spawnShockwave(_p,_dir); }
+}
+/* Ondes de choc (ultime poings) : front qui balaie vers l'avant et détruit tout */
+function spawnShockwave(origin,dir){
+  let m=shockPool.pop();
+  if(!m) m=new THREE.Mesh(SHOCK_GEO,new THREE.MeshBasicMaterial({color:0xffcf5c,transparent:true,opacity:0.7,blending:THREE.AdditiveBlending,depthWrite:false,side:THREE.DoubleSide}));
+  m.visible=true; m.position.copy(origin); m.scale.setScalar(1);
+  m.quaternion.setFromUnitVectors(_forwardZ, dir.lengthSq()>0?dir:_forwardZ);
+  if(!m.parent) scene.add(m);
+  shockwaves.push({mesh:m,dx:dir.x,dy:dir.y,dz:dir.z,dist:0,life:SHOCK_LIFE});
+}
+function updateShockwaves(dt){
+  for(let i=shockwaves.length-1;i>=0;i--){
+    const s=shockwaves[i]; s.life-=dt; s.dist+=SHOCK_SPEED*dt;
+    s.mesh.position.x+=s.dx*SHOCK_SPEED*dt; s.mesh.position.y+=s.dy*SHOCK_SPEED*dt; s.mesh.position.z+=s.dz*SHOCK_SPEED*dt;
+    const sc=1+s.dist*1.4; s.mesh.scale.setScalar(sc);
+    s.mesh.material.opacity=Math.max(0,s.life/SHOCK_LIFE)*0.7;
+    for(const t of targets){ if(t.dead||t.hit) continue;
+      if(t.mesh.position.distanceTo(s.mesh.position)<SHOCK_R*sc*0.4){ burst(t.mesh.position,new THREE.Color(0xffcf5c)); resolveHit(t); } }
+    if(s.life<=0){ s.mesh.visible=false; shockPool.push(s.mesh); shockwaves.splice(i,1); }
+  }
+}
+
+/* Laser continu : rayon depuis la main ; détruit les cibles sur son axe */
+function laserBeamHit(controller){
+  controller.getWorldPosition(_p); controller.getWorldQuaternion(_q);
+  _fwd.set(0,0,-1).applyQuaternion(_q).normalize();
+  for(const t of targets){ if(t.dead||t.hit) continue;
+    _dir.copy(t.mesh.position).sub(_p); const proj=_dir.dot(_fwd); if(proj<0) continue;
+    _pt.copy(_p).addScaledVector(_fwd,proj);
+    if(_pt.distanceTo(t.mesh.position)<LASER_HIT_R){
+      const p=(songTimeNow()-(t.beatTime-TRAVEL))/TRAVEL;
+      if(p<HIT_EARLY||p>HIT_LATE) continue;
+      resolveHit(t); }
+  }
+}
+/* Faisceau central géant (ultime laser) : détruit une large colonne centrale */
+function bigBeamClear(){
+  for(const t of targets){ if(t.dead||t.hit) continue;
+    const dx=t.mesh.position.x, dy=t.mesh.position.y-1.3;
+    if(dx*dx+dy*dy<0.55*0.55){ burst(t.mesh.position,new THREE.Color(0xff5ad6)); resolveHit(t); } }
+}
+/* logique par frame du laser continu : faisceau + surchauffe (violet en ultime) */
+function laserFrame(c,dt,now){
+  const inf=ultActive&&ultWeapon==='laser';
+  c.userData.heat=Math.max(0,c.userData.heat-HEAT_COOL*dt);
+  if(inf){ c.userData.heat=0; c.userData.overheated=false; }
+  if(c.userData.overheated && c.userData.heat<=HEAT_RESUME) c.userData.overheated=false;
+  const pr=c.userData.parts, firing=c.userData.firing && !c.userData.overheated;
+  pr.beam.visible=firing; pr.beamCore.visible=firing;
+  if(firing){
+    laserBeamHit(c);
+    if(!inf){ c.userData.heat+=LASER_HEAT_PER;
+      if(c.userData.heat>=1){ c.userData.heat=1; c.userData.overheated=true; controllerWorld(c,_pt); spawnFloat('SURCHAUFFE',0xff5b5b,_pt); sfx.overheat(); } }
+  }
+  pr.heatFill.scale.x=Math.max(0.001,c.userData.heat);
+  _cTmp.copy(_cCool).lerp(_cHot,c.userData.heat); pr.heatFill.material.color.copy(_cTmp);
+  pr.beam.material.color.setHex(inf?0xff5ad6:c.userData.color);
+}
+
+/* Colonnes de feu (ultime boules de feu) : piliers sur les couloirs qui brûlent au passage */
+function spawnFireColumns(){
+  for(const lane of LANES){
+    const m=new THREE.Mesh(FIRECOL_GEO,new THREE.MeshBasicMaterial({color:0xff7a1a,transparent:true,opacity:0.5,blending:THREE.AdditiveBlending,depthWrite:false,side:THREE.DoubleSide}));
+    m.position.set(lane.x,1.1,HIT_Z); scene.add(m); fireColumns.push(m);
+  }
+}
+function clearFireColumns(){ for(const m of fireColumns){ scene.remove(m); m.material.dispose(); } fireColumns.length=0; }
+function updateFireColumns(dt){
+  if(!fireColumns.length) return;
+  const t=performance.now()*0.008;
+  for(const m of fireColumns){ m.material.opacity=0.4+0.22*Math.sin(t+m.position.x*4); m.rotation.y+=dt*2.5;
+    for(const tg of targets){ if(tg.dead||tg.hit) continue;
+      const dx=tg.mesh.position.x-m.position.x, dz=tg.mesh.position.z-m.position.z;
+      if(dx*dx+dz*dz<0.36*0.36){ burst(tg.mesh.position,new THREE.Color(0xff7a1a)); resolveHit(tg); } }
+  }
+}
+function clearPhase3(){   // remise à zéro entre deux parties
+  for(const p of projectiles){ p.mesh.visible=false; fireballPool.push(p.mesh); } projectiles.length=0;
+  for(const s of shockwaves){ s.mesh.visible=false; shockPool.push(s.mesh); } shockwaves.length=0;
+  clearFireColumns(); if(bigBeam) bigBeam.visible=false;
 }
 
 /* ==================== PARTICULES & TEXTES ==================== */
@@ -991,6 +1170,8 @@ function loop(){
     const st=songTimeNow(); updateTargets(st);
     for(const c of controllers){
       if(weapon==='swords'){ meleeCheck(c); }
+      else if(weapon==='fists'){ punchCheck(c,dt); }
+      else if(weapon==='laser'){ laserFrame(c,dt,now); }
       else if(weapon==='smg'){
         const inf = ultActive && ultWeapon==='smg';   // ultime : surchauffe illimitée
         c.userData.heat=Math.max(0,c.userData.heat-HEAT_COOL*dt);
@@ -1009,6 +1190,8 @@ function loop(){
         pr.sBarrel.material.emissive.setHex(inf?0x8b5cff:(c.userData.overheated?0xff3b3b:c.userData.color));
       }
     }
+    updateProjectiles(dt); updateShockwaves(dt); updateFireColumns(dt);
+    if(ultActive&&ultWeapon==='laser') bigBeamClear();
     if(ultActive && now-lastUltHud>150){ lastUltHud=now; updateHudScore(); }   // décompte de l'ultime
     if(st>songDuration+1.5) finish();
   }
@@ -1037,7 +1220,10 @@ function onSelect(controller){
   else if(state==='playing'){
     if(weapon==='pistols') fireShot(controller);
     else if(weapon==='smg'){ controller.userData.firing=true; controller.userData.lastShot=0; }
-    // épées : rien à la gâchette (contact géré en continu)
+    else if(weapon==='laser'){ controller.userData.firing=true; }
+    else if(weapon==='fireball'){ controller.getWorldPosition(_p); controller.getWorldQuaternion(_q);
+      _fwd.set(0,0,-1).applyQuaternion(_q).normalize(); throwFireball(_p,_fwd); }
+    // épées : contact continu ; poings : coup à la vitesse
   }
 }
 function onBButton(){
@@ -1049,11 +1235,19 @@ function onDesktopClick(){
   if(state==='idle'||state==='finished'){ startCountdown(); return; }
   if(state==='paused'){ resumeGame(); return; }
   if(state==='playing'){
+    // bureau : la boule de feu vise la meilleure cible (les autres armes = coup le plus juste)
+    if(weapon==='fireball'){ _p.copy(_camPos);
+      let bt=null,bb=99;
+      for(const t of targets){ if(t.dead||t.hit)continue;
+        const pp=(songTimeNow()-(t.beatTime-TRAVEL))/TRAVEL;
+        if(pp<HIT_EARLY||pp>HIT_LATE)continue; if(Math.abs(1-pp)<Math.abs(1-bb)){bb=pp;bt=t;} }
+      if(bt){ _dir.copy(bt.mesh.position).sub(_p).normalize(); throwFireball(_p,_dir); } else throwFireball(_p,_cf);
+      return; }
     let best=null,bp=99;
     for(const t of targets){ if(t.dead||t.hit)continue;
       const p=(songTimeNow()-(t.beatTime-TRAVEL))/TRAVEL;
       if(p<HIT_EARLY||p>HIT_LATE)continue; if(Math.abs(1-p)<Math.abs(1-bp)){bp=p;best=t;} }
-    if(best) resolveHit(best);
+    if(best){ resolveHit(best); if(weapon==='fists'&&ultActive&&ultWeapon==='fists') spawnShockwave(_camPos,_cf); }
   }
 }
 function onKey(e){
