@@ -179,6 +179,7 @@
       <span title="Gâchette : lancer / tirer">🎯 gâchette</span>
       <span title="B : pause, puis quitter">⏸️ B</span>
       <span title="Bureau : clic tir · P pause · Échap quitter">🖱️ clic · P · Échap</span>
+      <span title="Jauge pleine : bouton A ou les 2 gâchettes (bureau : touche U)">✦ ultime : A / 2 gâchettes</span>
     </div>
   </div>
 </div>
@@ -209,9 +210,15 @@ let sfxOn=true;                   // effets sonores
 let colorMatch=true;              // cibles associées à la couleur de la main
 
 /* Phase 1 : jauge de charge partagée + suivi des basses pour les vagues */
-let charge=0;                     // 0..1, commune aux deux mains (ultime câblé en Phase 2)
+let charge=0;                     // 0..1, commune aux deux mains
 let bassAvg=0, lastDrop=0;
 const addCharge=x=>{ charge=Math.min(1,charge+x); };
+
+/* Phase 2 : ultime (jauge pleine → effet temporisé selon l'arme) */
+let ultActive=false, ultEnd=0, ultWeapon=null, lastUltHud=0, bothTrigPrev=false;
+const ULT_DURATION=9000;          // durée d'un ultime (ms)
+const ULT_GRENADE_RADIUS=1.7;     // rayon d'explosion des grenades (ultime pistolets)
+const SABER_ULT_REACH=2.2, SABER_ULT_LEN=1.5;   // portée / longueur x pendant l'ultime sabre
 
 const TRAVEL=1.9, HIT_Z=-0.55, SPAWN_Z=HIT_Z-9;
 const SMG_INTERVAL=0.09, HEAT_PER_SHOT=0.06, HEAT_COOL=0.35, HEAT_RESUME=0.3;
@@ -426,8 +433,9 @@ function makeTrail(color){
 }
 function updateTrail(c){
   const tr=c.userData.trail; if(!tr) return;
-  _a.set(0,SABER_BASE,0).applyAxisAngle(_xAxis,SABER_TILT); c.localToWorld(_a);              // base de la lame (monde)
-  _b.set(0,SABER_BASE+SABER_LEN,0).applyAxisAngle(_xAxis,SABER_TILT); c.localToWorld(_b);    // pointe (monde)
+  const m=saberUltLen();
+  _a.set(0,SABER_BASE*m,0).applyAxisAngle(_xAxis,SABER_TILT); c.localToWorld(_a);              // base de la lame (monde)
+  _b.set(0,(SABER_BASE+SABER_LEN)*m,0).applyAxisAngle(_xAxis,SABER_TILT); c.localToWorld(_b);   // pointe (monde)
   tr.samples.unshift({bx:_a.x,by:_a.y,bz:_a.z,tx:_b.x,ty:_b.y,tz:_b.z});
   if(tr.samples.length>TRAIL_SEG) tr.samples.pop();
   const pos=tr.geo.attributes.position.array, col=tr.geo.attributes.color.array, n=tr.samples.length, cc=tr.color;
@@ -475,7 +483,7 @@ function init3D(){
 
   for(let i=0;i<2;i++){
     const c=renderer.xr.getController(i);
-    c.userData={prevB:false,flash:0,color:0xffffff,source:null,firing:false,heat:0,overheated:false,lastShot:0};
+    c.userData={prevB:false,prevA:false,flash:0,color:0xffffff,source:null,firing:false,heat:0,overheated:false,lastShot:0};
     const parts=makeWeapons(0xffffff);
     c.add(parts.pistol); c.add(parts.smg); c.add(parts.sword);
     c.add(parts.laser); c.add(parts.heatBg); c.add(parts.heatFill);
@@ -522,6 +530,7 @@ function applyWeapon(){
     p.pistol.visible = weapon==='pistols';
     p.smg.visible    = weapon==='smg';
     p.sword.visible  = weapon==='swords';
+    p.sword.scale.set(1,1,1);   // annule un éventuel agrandissement d'ultime
     p.laser.visible  = weapon!=='swords';
     const heat = weapon==='smg';
     p.heatBg.visible=heat; p.heatFill.visible=heat;
@@ -595,7 +604,7 @@ function quitToMenu(){
 /* ===================== DÉROULÉ DE PARTIE ===================== */
 function startCountdown(){
   score=0;combo=0;bestCombo=0;hitCount=0;missCount=0;nextBeatIndex=0;
-  charge=0;bassAvg=0;lastDrop=0;
+  charge=0;bassAvg=0;lastDrop=0; ultActive=false; ultWeapon=null;
   clearTargets(); applyWeapon(); resultMesh.visible=false; hud.visible=true;
   ensureCtx(); lastCount=0; sfx.start();
   state='countdown'; countdownEnd=performance.now()+3000;
@@ -731,20 +740,24 @@ function fireShot(controller){          // pistolets + mitraillettes
     const ang=_fwd.angleTo(_dir);
     if(ang<bestAng){ bestAng=ang; best=t; }
   }
-  if(best){ resolveHit(best); haptic(controller,0.6,50); return true; }
+  if(best){ resolveHit(best); haptic(controller,0.6,50);
+    if(ultActive && ultWeapon==='pistols') grenadeExplode(best.mesh.position);   // tir-grenade : AoE
+    return true; }
   return false;
 }
 
 function meleeCheck(controller){        // épées : contact
   const color=controller.userData.color;
   // segment lame incliné (émetteur → pointe), même bascule que le visuel
-  _a.set(0,SABER_BASE,0).applyAxisAngle(_xAxis,SABER_TILT);           controller.localToWorld(_a);
-  _b.set(0,SABER_BASE+SABER_LEN,0).applyAxisAngle(_xAxis,SABER_TILT); controller.localToWorld(_b);
+  const m=saberUltLen();
+  _a.set(0,SABER_BASE*m,0).applyAxisAngle(_xAxis,SABER_TILT);           controller.localToWorld(_a);
+  _b.set(0,(SABER_BASE+SABER_LEN)*m,0).applyAxisAngle(_xAxis,SABER_TILT); controller.localToWorld(_b);
+  const reach=SWORD_REACH*(ultActive&&ultWeapon==='swords'?SABER_ULT_REACH:1);
   for(const t of targets){
     if(t.dead||t.hit||(colorMatch && t.type==='normal' && t.color!==color)) continue;   // spéciales : toute main
     const p=(songTimeNow()-(t.beatTime-TRAVEL))/TRAVEL;
     if(p<HIT_EARLY||p>HIT_LATE) continue;
-    if(distToSegment(t.mesh.position,_a,_b)<SWORD_REACH){ resolveHit(t); haptic(controller,0.7,55); }
+    if(distToSegment(t.mesh.position,_a,_b)<reach){ resolveHit(t); haptic(controller,0.7,55); }
   }
 }
 function distToSegment(pt,a,b){
@@ -801,6 +814,41 @@ function hitBoom(t){
 }
 function haptic(c,intensity,ms){ try{ c.userData.source?.gamepad?.hapticActuators?.[0]?.pulse(intensity,ms);}catch(e){} }
 
+/* ==================== ULTIME ==================== */
+const saberUltLen=()=>ultActive&&ultWeapon==='swords'?SABER_ULT_LEN:1;   // allongement de la lame pendant l'ultime
+function activateUltimate(){
+  if(state!=='playing' || charge<1 || ultActive) return;
+  ultActive=true; ultWeapon=weapon; ultEnd=performance.now()+ULT_DURATION; charge=0;
+  applyUltimateVisual(true);
+  _pt.copy(_camPos).addScaledVector(_cf,1.7); _pt.y+=0.25; spawnFloat('ULTIME !',0xffcf5c,_pt);
+  for(const c of controllers) haptic(c,1.0,140);
+  sfx.go(); updateHudScore();
+}
+function endUltimate(){
+  ultActive=false; ultWeapon=null; applyUltimateVisual(false);
+  for(const c of controllers){ c.userData.heat=0; c.userData.overheated=false; }
+  updateHudScore();
+}
+function applyUltimateVisual(on){
+  const saber = on && ultWeapon==='swords';
+  for(const c of controllers){ const p=c.userData.parts; if(p&&p.sword) p.sword.scale.set(saber?1.3:1, saber?SABER_ULT_LEN:1, saber?1.3:1); }
+}
+/* grenade (ultime pistolets) : explosion de zone autour du point d'impact */
+function grenadeExplode(center){
+  let cleared=0;
+  for(const o of targets){
+    if(o.dead||o.hit) continue;
+    if(o.mesh.position.distanceTo(center)<ULT_GRENADE_RADIUS){
+      o.hit=true; o.dead=true; o.mesh.visible=false; cleared++;
+      if(o.type!=='malus') hitCount++;
+      burst(o.mesh.position,o.mesh.material.emissive);
+    }
+  }
+  if(cleared) score+=comboBonus()*cleared;
+  burst(center,new THREE.Color(0xffa030)); burst(center,new THREE.Color(0xffffff));
+  ringFlash=performance.now()+180; updateHudScore();
+}
+
 /* ==================== PARTICULES & TEXTES ==================== */
 function burst(pos,color){
   for(let i=0;i<10;i++){
@@ -850,7 +898,7 @@ function updateFloats(dt){
 }
 
 /* ========================== HUD ========================== */
-function drawHud(l1,l2,gauge){
+function drawHud(l1,l2,gauge,ult){
   hudCtx.clearRect(0,0,512,200);
   hudCtx.fillStyle='rgba(11,14,26,.72)'; roundRect(hudCtx,6,6,500,188,22); hudCtx.fill();
   const withGauge = gauge!=null;
@@ -858,16 +906,20 @@ function drawHud(l1,l2,gauge){
   hudCtx.fillText(l1,256, withGauge?84:96);
   if(l2){ hudCtx.fillStyle='#8f8ab0'; hudCtx.font='500 24px "IBM Plex Mono", monospace'; hudCtx.fillText(l2,256, withGauge?130:150); }
   if(withGauge){
-    const x=40,y=156,w=432,h=15, full=gauge>=1;
+    const x=40,y=156,w=432,h=15, gold=ult||gauge>=1;
     hudCtx.fillStyle='rgba(255,255,255,.09)'; roundRect(hudCtx,x,y,w,h,8); hudCtx.fill();
-    hudCtx.fillStyle= full?'#ffcf5c':'#4fd6c8'; roundRect(hudCtx,x,y,Math.max(7,w*gauge),h,8); hudCtx.fill();
-    hudCtx.fillStyle= full?'#ffcf5c':'#8f8ab0'; hudCtx.font='500 17px "IBM Plex Mono", monospace';
-    hudCtx.fillText(full?'ULTIME PRÊT (bientôt)':'charge', 256, 187);
+    hudCtx.fillStyle= gold?'#ffcf5c':'#4fd6c8'; roundRect(hudCtx,x,y,Math.max(7,w*gauge),h,8); hudCtx.fill();
+    hudCtx.fillStyle= gold?'#ffcf5c':'#8f8ab0'; hudCtx.font='500 17px "IBM Plex Mono", monospace';
+    hudCtx.fillText(ult?'ULTIME ACTIF':(gauge>=1?'ULTIME PRÊT — A / 2 gâchettes':'charge'), 256, 187);
   }
   hudTex.needsUpdate=true;
 }
-function updateHudScore(){ drawHud(String(score),'combo ×'+combo, charge);
-  el('hudScore').textContent=score; el('hudCombo').textContent='combo ×'+combo; }
+function updateHudScore(){
+  const ult=ultActive, secs=ult?Math.max(0,Math.ceil((ultEnd-performance.now())/1000)):0;
+  const g = ult ? Math.max(0,(ultEnd-performance.now())/ULT_DURATION) : charge;
+  drawHud(String(score), ult?('ULTIME · '+secs+'s'):('combo ×'+combo), g, ult);
+  el('hudScore').textContent=score;
+  el('hudCombo').textContent = ult ? ('ULTIME '+secs+'s') : ('combo ×'+combo); }
 function roundRect(c,x,y,w,h,r){ c.beginPath(); c.moveTo(x+r,y);
   c.arcTo(x+w,y,x+w,y+h,r); c.arcTo(x+w,y+h,x,y+h,r); c.arcTo(x,y+h,x,y,r); c.arcTo(x,y,x+w,y,r); c.closePath(); }
 
@@ -908,11 +960,17 @@ function loop(){
   }
 
   const now=performance.now();
+  if(ultActive && now>ultEnd) endUltimate();
+  let bothTrig = controllers.length>=2, anyTrigSrc=false;
   for(const c of controllers){
     const gp=c.userData.source&&c.userData.source.gamepad;
     const pressed=gp&&gp.buttons[5]?gp.buttons[5].pressed:false;
     if(pressed&&!c.userData.prevB) onBButton();
     c.userData.prevB=pressed;
+    const aBtn=gp&&gp.buttons[4]?gp.buttons[4].pressed:false;      // A / X : déclenche l'ultime
+    if(aBtn&&!c.userData.prevA) activateUltimate();
+    c.userData.prevA=aBtn;
+    if(gp){ anyTrigSrc=true; if(!(gp.buttons[0]&&gp.buttons[0].pressed)) bothTrig=false; } else bothTrig=false;
     const p=c.userData.parts;
     if(p&&p.laser.visible) p.laser.material.opacity=now<c.userData.flash?0.95:0.18;
     // traînée du sabre : active tant qu'on tient le sabre (hors menu/pause)
@@ -920,6 +978,8 @@ function loop(){
     if(tr){ const on = weapon==='swords' && state!=='menu' && state!=='paused';
       tr.mesh.visible=on; if(on) updateTrail(c); else tr.samples.length=0; }
   }
+  if(bothTrig && anyTrigSrc && !bothTrigPrev) activateUltimate();   // les 2 gâchettes maintenues ensemble
+  bothTrigPrev = bothTrig && anyTrigSrc;
 
   if(state==='countdown'){
     const remain=(countdownEnd-now)/1000;
@@ -932,21 +992,24 @@ function loop(){
     for(const c of controllers){
       if(weapon==='swords'){ meleeCheck(c); }
       else if(weapon==='smg'){
-        // refroidissement
+        const inf = ultActive && ultWeapon==='smg';   // ultime : surchauffe illimitée
         c.userData.heat=Math.max(0,c.userData.heat-HEAT_COOL*dt);
+        if(inf){ c.userData.heat=0; c.userData.overheated=false; }
         if(c.userData.overheated && c.userData.heat<=HEAT_RESUME) c.userData.overheated=false;
         if(c.userData.firing && !c.userData.overheated && (now-c.userData.lastShot)/1000>=SMG_INTERVAL){
-          fireShot(c); c.userData.lastShot=now; c.userData.heat+=HEAT_PER_SHOT;
-          if(c.userData.heat>=1){ c.userData.heat=1; c.userData.overheated=true;
-            controllerWorld(c,_pt); spawnFloat('SURCHAUFFE',0xff5b5b,_pt); sfx.overheat(); }
+          fireShot(c); c.userData.lastShot=now;
+          if(!inf){ c.userData.heat+=HEAT_PER_SHOT;
+            if(c.userData.heat>=1){ c.userData.heat=1; c.userData.overheated=true;
+              controllerWorld(c,_pt); spawnFloat('SURCHAUFFE',0xff5b5b,_pt); sfx.overheat(); } }
         }
-        // jauge + teinte
+        // jauge + teinte (violet pendant l'ultime)
         const pr=c.userData.parts;
         pr.heatFill.scale.x=Math.max(0.001,c.userData.heat);
         _cTmp.copy(_cCool).lerp(_cHot,c.userData.heat); pr.heatFill.material.color.copy(_cTmp);
-        pr.sBarrel.material.emissive.setHex(c.userData.overheated?0xff3b3b:c.userData.color);
+        pr.sBarrel.material.emissive.setHex(inf?0x8b5cff:(c.userData.overheated?0xff3b3b:c.userData.color));
       }
     }
+    if(ultActive && now-lastUltHud>150){ lastUltHud=now; updateHudScore(); }   // décompte de l'ultime
     if(st>songDuration+1.5) finish();
   }
 
@@ -996,6 +1059,7 @@ function onDesktopClick(){
 function onKey(e){
   if(renderer.xr.isPresenting) return;
   if(e.key==='p'||e.key==='P'){ if(state==='playing')pauseGame(); else if(state==='paused')resumeGame(); }
+  else if(e.key==='u'||e.key==='U'){ activateUltimate(); }   // ultime (bureau)
   else if(e.key==='Escape'){ if(state!=='menu') quitToMenu(); }
 }
 
