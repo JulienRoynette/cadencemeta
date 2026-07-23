@@ -377,7 +377,7 @@ let TARGET_GEO=null, PARTICLE_GEO=null, MALUS_GEO=null, ENERGY_GEO=null, BOOM_GE
 /* Phase 3 : projectiles (boules de feu), ondes de choc (poings), colonnes de feu (ult boules) */
 const projectiles=[], shockwaves=[], fireColumns=[], blasts=[], fireballPool=[], shockPool=[], blastPool=[];
 let FIREBALL_GEO=null, FIREBALL_GLOW_GEO=null, SHOCK_GEO=null, FIRECOL_GEO=null, bigBeam=null;
-let hud,hudCtx,hudTex,hitRing,analyser,freqData,playSource=null,nextBeatIndex=0,started3D=false;
+let hud,hudCtx,hudTex,timeHud,timeCtx,timeTex,hitRing,analyser,freqData,playSource=null,nextBeatIndex=0,started3D=false;
 let ringFlash=0, resultMesh,resultCtx,resultTex;
 
 function makeWeapons(color){
@@ -581,6 +581,13 @@ function init3D(){
     new THREE.MeshBasicMaterial({map:hudTex,transparent:true,depthTest:false}));
   hud.renderOrder=999; scene.add(hud);
   drawHud('Gâchette : lancer','B : quitter');
+
+  // panneau du temps, ancré en haut à gauche du regard (VR)
+  const tc=document.createElement('canvas'); tc.width=256; tc.height=72;
+  timeCtx=tc.getContext('2d'); timeTex=new THREE.CanvasTexture(tc);
+  timeHud=new THREE.Mesh(new THREE.PlaneGeometry(0.34,0.096),
+    new THREE.MeshBasicMaterial({map:timeTex,transparent:true,depthTest:false}));
+  timeHud.renderOrder=999; timeHud.visible=false; scene.add(timeHud);
 
   const rc=document.createElement('canvas'); rc.width=700; rc.height=460;
   resultCtx=rc.getContext('2d'); resultTex=new THREE.CanvasTexture(rc);
@@ -1171,39 +1178,42 @@ function updateFloats(dt){
 }
 
 /* ========================== HUD ========================== */
-function drawHud(l1,l2,gauge,ult,prog,timeStr){
+function drawHud(l1,l2,gauge,ult){
   hudCtx.clearRect(0,0,512,200);
   hudCtx.fillStyle='rgba(11,14,26,.72)'; roundRect(hudCtx,6,6,500,188,22); hudCtx.fill();
-  const withGauge = gauge!=null, withTime = prog!=null;
-  hudCtx.textAlign='center';
-  // ---- progression du temps : petit anneau discret + temps en texte (distinct de la charge)
-  if(withTime){
-    const cx=200, cy=27, r=11;
-    hudCtx.lineWidth=3; hudCtx.lineCap='round';
-    hudCtx.beginPath(); hudCtx.arc(cx,cy,r,0,Math.PI*2); hudCtx.strokeStyle='rgba(255,255,255,.13)'; hudCtx.stroke();
-    hudCtx.beginPath(); hudCtx.arc(cx,cy,r,-Math.PI/2,-Math.PI/2+Math.max(0.0001,prog)*Math.PI*2); hudCtx.strokeStyle='#8f8ab0'; hudCtx.stroke();
-    hudCtx.textAlign='left'; hudCtx.textBaseline='middle'; hudCtx.fillStyle='#8f8ab0'; hudCtx.font='500 16px "IBM Plex Mono", monospace';
-    hudCtx.fillText(timeStr, cx+r+9, cy+1);
-    hudCtx.textAlign='center'; hudCtx.textBaseline='alphabetic';
-  }
-  hudCtx.fillStyle='#f2ede4'; hudCtx.font='600 58px Inter, sans-serif';
-  hudCtx.fillText(l1,256, withTime?98:(withGauge?84:96));
-  if(l2){ hudCtx.fillStyle='#8f8ab0'; hudCtx.font='500 23px "IBM Plex Mono", monospace'; hudCtx.fillText(l2,256, withTime?134:(withGauge?130:150)); }
-  // ---- barre de charge / ultime (en bas, cyan/or)
+  const withGauge = gauge!=null;
+  hudCtx.textAlign='center'; hudCtx.fillStyle='#f2ede4'; hudCtx.font='600 62px Inter, sans-serif';
+  hudCtx.fillText(l1,256, withGauge?84:96);
+  if(l2){ hudCtx.fillStyle='#8f8ab0'; hudCtx.font='500 24px "IBM Plex Mono", monospace'; hudCtx.fillText(l2,256, withGauge?130:150); }
   if(withGauge){
-    const x=40,y=158,w=432,h=13, gold=ult||gauge>=1;
-    hudCtx.fillStyle='rgba(255,255,255,.09)'; roundRect(hudCtx,x,y,w,h,7); hudCtx.fill();
-    hudCtx.fillStyle= gold?'#ffcf5c':'#4fd6c8'; roundRect(hudCtx,x,y,Math.max(6,w*gauge),h,7); hudCtx.fill();
-    hudCtx.fillStyle= gold?'#ffcf5c':'#8f8ab0'; hudCtx.font='500 15px "IBM Plex Mono", monospace';
-    hudCtx.fillText(ult?'ULTIME ACTIF':(gauge>=1?'ULTIME PRÊT — 2 préhensions':'charge'), 256, 183);
+    const x=40,y=156,w=432,h=15, gold=ult||gauge>=1;
+    hudCtx.fillStyle='rgba(255,255,255,.09)'; roundRect(hudCtx,x,y,w,h,8); hudCtx.fill();
+    hudCtx.fillStyle= gold?'#ffcf5c':'#4fd6c8'; roundRect(hudCtx,x,y,Math.max(7,w*gauge),h,8); hudCtx.fill();
+    hudCtx.fillStyle= gold?'#ffcf5c':'#8f8ab0'; hudCtx.font='500 17px "IBM Plex Mono", monospace';
+    hudCtx.fillText(ult?'ULTIME ACTIF':(gauge>=1?'ULTIME PRÊT — 2 préhensions':'charge'), 256, 187);
   }
   hudTex.needsUpdate=true;
+}
+/* panneau du temps (en haut à gauche) : petit anneau discret + temps en texte */
+function drawTimeHud(prog,timeStr){
+  if(!timeCtx) return;
+  timeCtx.clearRect(0,0,256,72);
+  timeCtx.fillStyle='rgba(11,14,26,.6)'; roundRect(timeCtx,2,2,252,68,16); timeCtx.fill();
+  const cx=32, cy=37, r=13;
+  timeCtx.lineWidth=3.5; timeCtx.lineCap='round';
+  timeCtx.beginPath(); timeCtx.arc(cx,cy,r,0,Math.PI*2); timeCtx.strokeStyle='rgba(255,255,255,.15)'; timeCtx.stroke();
+  timeCtx.beginPath(); timeCtx.arc(cx,cy,r,-Math.PI/2,-Math.PI/2+Math.max(0.0001,prog)*Math.PI*2); timeCtx.strokeStyle='#8f8ab0'; timeCtx.stroke();
+  timeCtx.textAlign='left'; timeCtx.textBaseline='middle'; timeCtx.fillStyle='#f2ede4'; timeCtx.font='500 26px "IBM Plex Mono", monospace';
+  timeCtx.fillText(timeStr, cx+r+12, cy+1);
+  timeCtx.textAlign='left'; timeCtx.textBaseline='alphabetic';
+  timeTex.needsUpdate=true;
 }
 function updateHudScore(){
   const ult=ultActive, secs=ult?Math.max(0,Math.ceil((ultEnd-performance.now())/1000)):0;
   const g = ult ? Math.max(0,(ultEnd-performance.now())/ULT_DURATION) : charge;
   const t=Math.max(0,songTimeNow()), prog=songDuration>0?Math.min(1,t/songDuration):0, timeStr=fmt(t)+' / '+fmt(songDuration);
-  drawHud(String(score), ult?('ULTIME · '+secs+'s'):('combo ×'+combo), g, ult, prog, timeStr);
+  drawHud(String(score), ult?('ULTIME · '+secs+'s'):('combo ×'+combo), g, ult);
+  drawTimeHud(prog,timeStr);
   el('hudScore').textContent=score;
   el('hudCombo').textContent = ult ? ('ULTIME '+secs+'s') : ('combo ×'+combo);
   el('hudTime').textContent=timeStr; }
@@ -1233,7 +1243,7 @@ function drawResults(){
 }
 
 /* ========================= BOUCLE ========================= */
-const _camPos=new THREE.Vector3(), _camQuat=new THREE.Quaternion(), _cf=new THREE.Vector3();
+const _camPos=new THREE.Vector3(), _camQuat=new THREE.Quaternion(), _cf=new THREE.Vector3(), _off=new THREE.Vector3();
 const _cHot=new THREE.Color(0xff3b3b), _cCool=new THREE.Color(0x4fd6c8), _cTmp=new THREE.Color();
 function loop(){
   const dt=Math.min(clock.getDelta(),0.05);
@@ -1242,6 +1252,15 @@ function loop(){
   _cf.set(0,0,-1).applyQuaternion(_camQuat);
 
   hud.position.copy(_camPos).addScaledVector(_cf,1.4); hud.position.y-=0.42; hud.quaternion.copy(_camQuat);
+  // temps : ancré en haut à gauche du regard (VR ; en bureau, le coin HTML #hud2d s'en charge)
+  if(timeHud){
+    timeHud.visible = renderer.xr.isPresenting && state==='playing';
+    if(timeHud.visible){
+      timeHud.position.copy(_camPos).addScaledVector(_cf,1.4);
+      _off.set(-0.62,0.42,0).applyQuaternion(_camQuat); timeHud.position.add(_off);
+      timeHud.quaternion.copy(_camQuat);
+    }
+  }
   if(state==='finished' && resultMesh.visible){
     resultMesh.position.copy(_camPos).addScaledVector(_cf,1.9); resultMesh.quaternion.copy(_camQuat);
   }
