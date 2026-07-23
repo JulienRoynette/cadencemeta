@@ -1136,11 +1136,15 @@ function drawHud(l1,l2,gauge,ult,prog,timeStr){
   hudCtx.fillStyle='rgba(11,14,26,.72)'; roundRect(hudCtx,6,6,500,188,22); hudCtx.fill();
   const withGauge = gauge!=null, withTime = prog!=null;
   hudCtx.textAlign='center';
-  // ---- progression du temps (en haut, blanc/gris : distinct de la barre de charge)
+  // ---- progression du temps : petit anneau discret + temps en texte (distinct de la charge)
   if(withTime){
-    hudCtx.fillStyle='#8f8ab0'; hudCtx.font='500 18px "IBM Plex Mono", monospace'; hudCtx.fillText(timeStr,256,27);
-    hudCtx.fillStyle='rgba(255,255,255,.10)'; roundRect(hudCtx,40,35,432,6,3); hudCtx.fill();
-    hudCtx.fillStyle='#f2ede4'; roundRect(hudCtx,40,35,Math.max(4,432*prog),6,3); hudCtx.fill();
+    const cx=200, cy=27, r=11;
+    hudCtx.lineWidth=3; hudCtx.lineCap='round';
+    hudCtx.beginPath(); hudCtx.arc(cx,cy,r,0,Math.PI*2); hudCtx.strokeStyle='rgba(255,255,255,.13)'; hudCtx.stroke();
+    hudCtx.beginPath(); hudCtx.arc(cx,cy,r,-Math.PI/2,-Math.PI/2+Math.max(0.0001,prog)*Math.PI*2); hudCtx.strokeStyle='#8f8ab0'; hudCtx.stroke();
+    hudCtx.textAlign='left'; hudCtx.textBaseline='middle'; hudCtx.fillStyle='#8f8ab0'; hudCtx.font='500 16px "IBM Plex Mono", monospace';
+    hudCtx.fillText(timeStr, cx+r+9, cy+1);
+    hudCtx.textAlign='center'; hudCtx.textBaseline='alphabetic';
   }
   hudCtx.fillStyle='#f2ede4'; hudCtx.font='600 58px Inter, sans-serif';
   hudCtx.fillText(l1,256, withTime?98:(withGauge?84:96));
