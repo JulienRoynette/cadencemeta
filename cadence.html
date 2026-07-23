@@ -249,6 +249,10 @@ let swapColors=false;
 /* scoring & cibles spéciales */
 const MALUS_PEN=250;              // pénalité si on tire sur un piège
 const T_MALUS=0xff1150, T_ENERGY=0x8b5cff, T_BOOM=0xff9500;   // rouge vif / violet / orange vif — distincts du corail-cyan des cibles normales
+const T_ARMOR=0x9fb4ff;          // cible renforcée : acier bleuté
+const ARMOR_HP=3;                // nombre de coups pour détruire une cible renforcée
+const ARMOR_COOLDOWN=160;        // ms mini entre deux dégâts (limite le tir continu)
+const CURVE_PROB=0.28;           // proportion de cibles à trajectoire courbe (non rectiligne)
 
 /* difficulté de visée : 0 = très précis, 1 = très permissif */
 let hitAssist=0.5;
@@ -369,7 +373,7 @@ const targets=[], particles=[], floats=[], reactive=[];
 /* pools d'objets réutilisables : évitent d'allouer géométries/matériaux à chaque
    cible/particule/texte, principale source de saccades et de fuite mémoire GPU */
 const targetPool=[], particlePool=[], floatPool=[], floatTexCache=new Map();
-let TARGET_GEO=null, PARTICLE_GEO=null, MALUS_GEO=null, ENERGY_GEO=null, BOOM_GEO=null;
+let TARGET_GEO=null, PARTICLE_GEO=null, MALUS_GEO=null, ENERGY_GEO=null, BOOM_GEO=null, ARMOR_GEO=null;
 /* Phase 3 : projectiles (boules de feu), ondes de choc (poings), colonnes de feu (ult boules) */
 const projectiles=[], shockwaves=[], fireColumns=[], blasts=[], fireballPool=[], shockPool=[], blastPool=[];
 let FIREBALL_GEO=null, FIREBALL_GLOW_GEO=null, SHOCK_GEO=null, FIRECOL_GEO=null, bigBeam=null;
@@ -523,6 +527,7 @@ function init3D(){
   MALUS_GEO=new THREE.OctahedronGeometry(0.17,0);    // piège : octaèdre anguleux
   ENERGY_GEO=new THREE.OctahedronGeometry(0.13,0);   // énergie : petit losange
   BOOM_GEO=new THREE.IcosahedronGeometry(0.18,0);    // explosion large : orbe
+  ARMOR_GEO=new THREE.DodecahedronGeometry(0.2,0);   // cible renforcée : plus grosse, facettée
   FIREBALL_GEO=new THREE.SphereGeometry(0.05,10,8);
   FIREBALL_GLOW_GEO=new THREE.SphereGeometry(0.10,10,8);
   SHOCK_GEO=new THREE.TorusGeometry(0.35,0.06,8,24);
@@ -722,13 +727,13 @@ function comboBonus(){ return 100+Math.min(combo,20)*10; }
 
 /* ========================= CIBLES ========================= */
 /* pools par type : chaque type a sa géométrie, on ne mélange donc pas les meshes */
-const MESH_POOLS={normal:targetPool, malus:[], energie:[], boom:[]};
-function targetGeo(type){ return type==='malus'?MALUS_GEO : type==='energie'?ENERGY_GEO : type==='boom'?BOOM_GEO : TARGET_GEO; }
+const MESH_POOLS={normal:targetPool, malus:[], energie:[], boom:[], armor:[]};
+function targetGeo(type){ return type==='malus'?MALUS_GEO : type==='energie'?ENERGY_GEO : type==='boom'?BOOM_GEO : type==='armor'?ARMOR_GEO : TARGET_GEO; }
 /* icône flottante (emoji) posée au-dessus des bonus/malus pour les rendre non ambigus */
 const _spriteTex={};
 function spriteTexFor(type){
   if(_spriteTex[type]) return _spriteTex[type];
-  const emo = type==='malus'?'⛔' : type==='energie'?'⚡' : '💥';
+  const emo = type==='malus'?'⛔' : type==='energie'?'⚡' : type==='armor'?'🛡️' : '💥';
   const cv=document.createElement('canvas'); cv.width=128; cv.height=128;
   const cx=cv.getContext('2d'); cx.textAlign='center'; cx.textBaseline='middle'; cx.font='96px serif';
   cx.fillText(emo,64,74);
@@ -750,7 +755,8 @@ function getTargetMesh(type,color){
   if(type==='malus'){ mesh.material.color.setHex(0x160010); mesh.material.emissive.setHex(T_MALUS); }
   else if(type==='energie'){ mesh.material.color.setHex(T_ENERGY); mesh.material.emissive.setHex(T_ENERGY); }
   else if(type==='boom'){ mesh.material.color.setHex(T_BOOM); mesh.material.emissive.setHex(T_BOOM); }
-  else { mesh.material.color.setHex(color); mesh.material.emissive.setHex(color); }
+  else if(type==='armor'){ mesh.material.color.setHex(0x2a3a5a); mesh.material.emissive.setHex(T_ARMOR); mesh.material.metalness=.75; mesh.material.roughness=.3; }
+  else { mesh.material.color.setHex(color); mesh.material.emissive.setHex(color); mesh.material.metalness=.15; }
   mesh.scale.setScalar(type==='boom'?1.25:1);
   mesh.rotation.set(0,0,0); mesh.visible=true;
   if(!mesh.parent) scene.add(mesh);
@@ -762,6 +768,7 @@ function pickType(){
   if(r<0.09) return 'malus';                              // piège à éviter (9 %)
   if(r<0.14) return charge>=1 ? 'normal' : 'energie';     // énergie (5 %) — inutile si la jauge est pleine
   if(r<0.17) return 'boom';                               // bombe / AoE (3 %)
+  if(r<0.25) return 'armor';                              // cible renforcée (8 %)
   return 'normal';
 }
 function spawnTarget(beatTime,idx,type){
@@ -771,7 +778,14 @@ function spawnTarget(beatTime,idx,type){
   const cx = weapon==='fists' ? lane.x*0.45 : lane.x;   // poings : cibles ramenées au centre, devant les gants
   const mesh=getTargetMesh(t,color);
   mesh.position.set(cx,lane.y,SPAWN_Z);
-  targets.push({mesh,beatTime,color,x:cx,y:lane.y,hit:false,dead:false,type:t});
+  const o={mesh,beatTime,color,x:cx,y:lane.y,hit:false,dead:false,type:t};
+  if(t==='armor') o.hp=ARMOR_HP;
+  // trajectoire courbe (non rectiligne) pour une partie des cibles normales/renforcées
+  if((t==='normal'||t==='armor') && Math.random()<CURVE_PROB){
+    o.sway=0.35+Math.random()*0.4; o.swayFreq=2.5+Math.random()*3; o.swayPh=Math.random()*Math.PI*2;
+    o.swayY=Math.random()<0.4 ? 0.1+Math.random()*0.22 : 0;
+  }
+  targets.push(o);
 }
 /* vague déclenchée sur un drop : ~6 cibles normales échelonnées, arrivant depuis le fond */
 function spawnWave(){
@@ -787,11 +801,17 @@ function updateTargets(st){
     if(t.dead) continue;
     const p=(st-(t.beatTime-TRAVEL))/TRAVEL;
     t.mesh.position.z=SPAWN_Z+(HIT_Z-SPAWN_Z)*p;
+    if(t.sway){   // trajectoire courbe : oscillation horizontale (et parfois verticale)
+      const ph=p*t.swayFreq*Math.PI*2+t.swayPh;
+      t.mesh.position.x=t.x+t.sway*Math.sin(ph);
+      if(t.swayY) t.mesh.position.y=t.y+t.swayY*Math.sin(ph+1.5);
+    }
     if(t.type==='normal'){ t.mesh.rotation.x+=0.02; t.mesh.rotation.y+=0.03; }
-    else { t.mesh.rotation.y+=0.015;   // spéciales : pulsation qui attire l'œil, icône maintenue au-dessus
+    else if(t.type==='armor'){ t.mesh.rotation.y+=0.02; }   // tourne sur place, garde l'icône 🛡️ au-dessus
+    else { t.mesh.rotation.y+=0.015;   // bonus/malus : pulsation qui attire l'œil, icône maintenue au-dessus
       t.mesh.scale.setScalar((t.type==='boom'?1.25:1)*(1+0.14*Math.sin(performance.now()*0.006))); }
     if(!t.hit && p>HIT_LATE){
-      if(t.type==='normal') onMiss(t);
+      if(t.type==='normal'||t.type==='armor') onMiss(t);   // renforcée non détruite = ratée
       else { t.dead=true; t.mesh.visible=false; }   // piège évité (ok) / bonus manqué : sans pénalité
     }
   }
@@ -864,14 +884,34 @@ function resolveHit(t){
   if(t.type==='malus')   return hitMalus(t);
   if(t.type==='energie') return hitEnergy(t);
   if(t.type==='boom')    return hitBoom(t);
+  if(t.type==='armor')   return hitArmor(t);
   return hitTarget(t);
 }
 function hitTarget(t){
   t.hit=true; t.dead=true; hitCount++; combo++; bestCombo=Math.max(bestCombo,combo);
-  score+=comboBonus();
-  addCharge(0.02);
+  let pts=comboBonus();
+  if(t.sway){ pts=Math.round(pts*1.5); addCharge(0.03);   // cible mobile : plus dure → bonus
+    spawnFloat('MOBILE +',0x4fd6c8,t.mesh.position.clone().setY(t.y+0.2)); }
+  score+=pts; addCharge(0.02);
   burst(t.mesh.position,t.mesh.material.color); t.mesh.visible=false;
   sfx.hit(combo); updateHudScore();
+}
+/* cible renforcée : encaisse ARMOR_HP coups, puis bonus de score + charge à la destruction */
+function hitArmor(t){
+  const nowMs=performance.now();
+  if(nowMs-(t.lastArmor||0) < ARMOR_COOLDOWN) return;   // limite la cadence (tir continu inclus)
+  t.lastArmor=nowMs; t.hp--;
+  burst(t.mesh.position,new THREE.Color(0xffffff));
+  if(t.hp>0){   // encaisse : teinte qui vire vers le rouge, pas encore détruite
+    t.mesh.material.emissive.setHex(t.hp===2?0xffa030:0xff4030);
+    sfx.tick(); ringFlash=performance.now()+110; return;
+  }
+  t.hit=true; t.dead=true; hitCount++; combo++; bestCombo=Math.max(bestCombo,combo);
+  score+=comboBonus()*2;      // BONUS score
+  addCharge(0.15);            // charge ++
+  burst(t.mesh.position,new THREE.Color(T_ARMOR)); burst(t.mesh.position,new THREE.Color(0xffffff)); t.mesh.visible=false;
+  spawnFloat('BLINDÉ +',T_ARMOR,t.mesh.position.clone().setY(t.y+0.22));
+  sfx.hit(combo); ringFlash=performance.now()+180; updateHudScore();
 }
 function hitMalus(t){
   t.hit=true; t.dead=true; combo=0; missCount++;
