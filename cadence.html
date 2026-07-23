@@ -75,8 +75,15 @@
     transition:border-color .18s,transform .25s}
   #swap:hover{border-color:var(--cyan);transform:rotate(180deg)}
 
+  /* ---- filtres de difficulté rapides ---- */
+  .presets{display:flex;gap:6px;margin-top:18px;flex-wrap:wrap}
+  .pre{flex:1;min-width:80px;cursor:pointer;border:1px solid var(--line);border-radius:10px;padding:9px 6px;
+    background:rgba(255,255,255,.02);color:var(--muted);font-family:"IBM Plex Mono",monospace;font-size:11px;
+    text-transform:uppercase;letter-spacing:.04em;transition:border-color .15s,background .15s,color .15s}
+  .pre:hover{border-color:var(--cyan);color:var(--ink)}
+  .pre.sel{border-color:var(--cyan);background:rgba(79,214,200,.1);color:var(--ink);box-shadow:0 0 0 1px var(--cyan) inset}
   /* ---- réglages : sliders à icône ---- */
-  .sliders{display:flex;flex-direction:column;gap:11px;margin-top:18px}
+  .sliders{display:flex;flex-direction:column;gap:11px;margin-top:14px}
   .slider{display:flex;align-items:center;gap:13px}
   .slider .si{font-size:19px;width:24px;text-align:center;flex:none}
   input[type=range]{flex:1;accent-color:var(--coral);height:4px;cursor:pointer}
@@ -160,12 +167,24 @@
       <button id="swap" title="Inverser les mains">⇄</button>
     </div>
 
+    <div class="presets" title="Règle d'un coup vitesse, nombre de cibles et portée">
+      <button class="pre" data-p="ve">très facile</button>
+      <button class="pre" data-p="e">facile</button>
+      <button class="pre sel" data-p="m">moyen</button>
+      <button class="pre" data-p="h">difficile</button>
+      <button class="pre" data-p="vh">très difficile</button>
+    </div>
+
     <div class="sliders">
-      <div class="slider" title="Densité des cibles">
+      <div class="slider" title="Vitesse d'arrivée des cibles">
+        <span class="si">⏩</span>
+        <input type="range" id="speed" min="0" max="1" step="0.05" value="0.5" />
+      </div>
+      <div class="slider" title="Nombre / densité des cibles">
         <span class="si">🎯</span>
         <input type="range" id="dens" min="0" max="1" step="0.05" value="0.5" />
       </div>
-      <div class="slider" title="Facilité de visée : précis → permissif">
+      <div class="slider" title="Portée / facilité de visée : précis → permissif">
         <span class="si">🧲</span>
         <input type="range" id="assist" min="0" max="1" step="0.05" value="0.5" />
       </div>
@@ -235,7 +254,9 @@ const PUNCH_SPEED=1.7, PUNCH_REACH=0.42;                      // poings (détect
 const LASER_HIT_R=0.32, LASER_HEAT_PER=0.0085;                // laser continu — surchauffe bien plus lente (~6 s)
 const SHOCK_SPEED=7, SHOCK_LIFE=0.85, SHOCK_R=1.1;            // ondes de choc (ultime poings)
 
-const TRAVEL=1.9, HIT_Z=-0.55, SPAWN_Z=HIT_Z-9;
+const HIT_Z=-0.55, SPAWN_Z=HIT_Z-9;
+let TRAVEL=1.9, targetSpeed=0.5;                     // vitesse d'arrivée des cibles (menu)
+function applySpeed(){ TRAVEL = 2.7 - targetSpeed*1.6; }   // 0 = lent (2.7 s) → 1 = rapide (1.1 s)
 const SMG_INTERVAL=0.09, HEAT_PER_SHOT=0.06, HEAT_COOL=0.35, HEAT_RESUME=0.3;
 const LANES=[{x:-0.9,y:1.05},{x:-0.45,y:1.5},{x:0,y:1.15},{x:0.45,y:1.5},{x:0.9,y:1.05}];
 /* sabre laser : lame inclinée vers l'avant (prolonge la main) ; TRAIL_SEG segments de traînée */
@@ -609,7 +630,7 @@ function applyWeapon(){
     p.lgun.visible   = weapon==='laser';
     p.beam.visible=false; p.beamCore.visible=false;
     p.laser.visible  = weapon==='pistols'||weapon==='smg'||weapon==='fireball';   // viseur des armes à distance
-    const heat = weapon==='smg'||weapon==='laser';
+    const heat = weapon==='smg';   // seule la mitraillette gère une surchauffe (laser : illimité)
     p.heatBg.visible=heat; p.heatFill.visible=heat;
     c.userData.heat=0; c.userData.overheated=false; c.userData.firing=false; c.userData.prevPos=null;
     if(c.userData.trail){ c.userData.trail.samples.length=0; c.userData.trail.mesh.visible=false; }
@@ -690,7 +711,8 @@ function startCountdown(){
 /* session sans musique : rythme régulier généré, 2 minutes */
 function prepareNoMusic(){
   decodedBuffer=null; songDuration=120; beats=[];
-  for(let t=1.0; t<songDuration-0.5; t+=0.5) beats.push(t);   // ~120 BPM
+  const interval = 0.75 - sensitivity*0.45;   // densité (menu) → espacement des cibles (0.75 s → 0.30 s)
+  for(let t=1.0; t<songDuration-0.5; t+=interval) beats.push(t);
 }
 function startSong(){
   const ctx=ensureCtx(); if(ctx.state==='suspended') ctx.resume();
@@ -1082,19 +1104,11 @@ function bigBeamClear(){
 }
 /* logique par frame du laser continu : faisceau + surchauffe (violet en ultime) */
 function laserFrame(c,dt,now){
-  const inf=ultActive&&ultWeapon==='laser';
-  c.userData.heat=Math.max(0,c.userData.heat-HEAT_COOL*dt);
-  if(inf){ c.userData.heat=0; c.userData.overheated=false; }
-  if(c.userData.overheated && c.userData.heat<=HEAT_RESUME) c.userData.overheated=false;
-  const pr=c.userData.parts, firing=c.userData.firing && !c.userData.overheated;
+  // laser sans surchauffe : faisceau continu tant que la gâchette est tenue
+  const pr=c.userData.parts, firing=c.userData.firing;
   pr.beam.visible=firing; pr.beamCore.visible=firing;
-  if(firing){
-    laserBeamHit(c);
-    if(!inf){ c.userData.heat+=LASER_HEAT_PER;
-      if(c.userData.heat>=1){ c.userData.heat=1; c.userData.overheated=true; controllerWorld(c,_pt); spawnFloat('SURCHAUFFE',0xff5b5b,_pt); sfx.overheat(); } }
-  }
-  pr.heatFill.scale.x=Math.max(0.001,c.userData.heat);
-  _cTmp.copy(_cCool).lerp(_cHot,c.userData.heat); pr.heatFill.material.color.copy(_cTmp);
+  if(firing) laserBeamHit(c);
+  const inf=ultActive&&ultWeapon==='laser';
   pr.beam.material.color.setHex(inf?0xff5ad6:c.userData.color);
 }
 
@@ -1387,6 +1401,15 @@ el('dens').addEventListener('change',async e=>{
     setStatus(beats.length+' battements · ~'+estimateBpm(beats)+' BPM · '+fmt(songDuration),'ok'); }
 });
 el('assist').addEventListener('input',e=>{ hitAssist=parseFloat(e.target.value); applyDifficulty(); });
+el('speed').addEventListener('input',e=>{ targetSpeed=parseFloat(e.target.value); applySpeed(); });
+// filtres de difficulté : [vitesse, densité, portée(assist)]
+const PRESETS={ ve:[0.15,0.25,1.0], e:[0.34,0.42,0.78], m:[0.5,0.55,0.5], h:[0.72,0.75,0.28], vh:[0.92,0.9,0.1] };
+function setSlider(id,val){ const s=el(id); if(!s) return; s.value=val; s.dispatchEvent(new Event('input')); s.dispatchEvent(new Event('change')); }
+document.querySelectorAll('.pre').forEach(btn=>btn.addEventListener('click',()=>{
+  const p=PRESETS[btn.dataset.p]; if(!p) return;
+  setSlider('speed',p[0]); setSlider('dens',p[1]); setSlider('assist',p[2]);
+  document.querySelectorAll('.pre').forEach(b=>b.classList.remove('sel')); btn.classList.add('sel');
+}));
 el('colorMatch').addEventListener('click',()=>{
   colorMatch=!colorMatch;
   const b=el('colorMatch');
