@@ -109,6 +109,7 @@
     border:1px solid var(--line);border-radius:8px;padding:6px 10px}
   #hud2d{position:fixed;top:20px;left:20px;z-index:9;font-family:"IBM Plex Mono",monospace;
     color:var(--ink);display:none;text-shadow:0 2px 10px rgba(0,0,0,.6)}
+  #hud2d .tm{font-family:"IBM Plex Mono",monospace;font-size:13px;color:var(--muted);margin-bottom:2px}
   #hud2d .sc{font-size:34px;font-weight:500}
   #hud2d .cb{font-size:14px;color:var(--gold)}
   #back{position:fixed;top:20px;right:20px;z-index:11;display:none;background:rgba(0,0,0,.4);
@@ -130,7 +131,7 @@
     <input id="file" type="file" accept="audio/*" />
 
     <canvas class="viz" id="viz" width="1120" height="160"></canvas>
-    <div class="status"><span class="dot" id="dot"></span><span id="status">En attente d'une piste.</span></div>
+    <div class="status"><span class="dot" id="dot"></span><span id="status">Charge une piste — ou lance sans musique (2 min).</span></div>
 
     <div class="weapons">
       <button class="wpn selected" data-w="pistols" title="Tir précis · un coup par gâchette">
@@ -180,8 +181,8 @@
     </div>
 
     <div class="actions">
-      <button class="cta" id="startVR" disabled><span class="bi">🥽</span>Jouer en VR</button>
-      <button class="cta ghost" id="startPreview" disabled><span class="bi">🖥️</span>Bureau</button>
+      <button class="cta" id="startVR"><span class="bi">🥽</span>Jouer en VR</button>
+      <button class="cta ghost" id="startPreview"><span class="bi">🖥️</span>Bureau</button>
     </div>
 
     <div class="keys">
@@ -194,7 +195,7 @@
 </div>
 
 <button id="back">↩ menu</button>
-<div id="hud2d"><div class="sc" id="hudScore">0</div><div class="cb" id="hudCombo">combo ×0</div></div>
+<div id="hud2d"><div class="tm" id="hudTime">0:00 / 0:00</div><div class="sc" id="hudScore">0</div><div class="cb" id="hudCombo">combo ×0</div></div>
 
 <script type="importmap">
 {
@@ -323,7 +324,9 @@ async function loadFile(file){
     drawWaveform(decodedBuffer,beats);
     setStatus(beats.length+' battements · ~'+estimateBpm(beats)+' BPM · '+fmt(songDuration),'ok');
     el('startVR').disabled=false; el('startPreview').disabled=false;
-  }catch(err){ console.error(err); setStatus('Lecture impossible. Essaie un autre fichier audio.',null); }
+  }catch(err){ console.error(err); decodedBuffer=null;
+    setStatus('Lecture impossible — tu peux jouer sans musique (2 min).',null);
+    el('startVR').disabled=false; el('startPreview').disabled=false; }
 }
 async function analyze(buffer,sens){
   const off=new OfflineAudioContext(1,buffer.length,buffer.sampleRate);
@@ -424,12 +427,18 @@ function makeWeapons(color){
   const heatFill=new THREE.Mesh(fillGeo,new THREE.MeshBasicMaterial({color:0x4fd6c8}));
   heatFill.position.set(-0.06,0.06,0.021); heatFill.scale.x=0.001;
 
-  // Poings (body-boxe) : gant coloré au niveau de la main
-  const glove=new THREE.Mesh(new THREE.IcosahedronGeometry(0.06,1),
-    new THREE.MeshStandardMaterial({color,emissive:color,emissiveIntensity:.35,roughness:.5,metalness:.1}));
-  glove.position.set(0,0,0.01);
-  const cuff=new THREE.Mesh(new THREE.CylinderGeometry(0.035,0.042,0.05,12),new THREE.MeshStandardMaterial({color:0x201a30}));
-  cuff.rotation.x=Math.PI/2; cuff.position.set(0,0,0.06); glove.add(cuff);
+  // Poings : gant de boxe (poing coloré bombé + pouce + liseré blanc + manchette)
+  const glove=new THREE.Group();
+  const gmain=new THREE.Mesh(new THREE.SphereGeometry(0.062,16,12),
+    new THREE.MeshStandardMaterial({color,emissive:color,emissiveIntensity:.28,roughness:.55,metalness:.05}));
+  gmain.scale.set(1.05,0.92,1.18); gmain.position.set(0,0.008,-0.02); glove.add(gmain);
+  const gthumb=new THREE.Mesh(new THREE.SphereGeometry(0.03,12,10),
+    new THREE.MeshStandardMaterial({color,emissive:color,emissiveIntensity:.28,roughness:.55}));
+  gthumb.position.set(0.055,-0.012,0.0); glove.add(gthumb);
+  const gband=new THREE.Mesh(new THREE.TorusGeometry(0.05,0.013,8,20),new THREE.MeshStandardMaterial({color:0xf2ede4,roughness:.6}));
+  gband.rotation.y=Math.PI/2; gband.position.set(0,0.004,0.015); glove.add(gband);
+  const gcuff=new THREE.Mesh(new THREE.CylinderGeometry(0.04,0.048,0.06,14),new THREE.MeshStandardMaterial({color:0x201a30,roughness:.6}));
+  gcuff.rotation.x=Math.PI/2; gcuff.position.set(0,-0.012,0.07); glove.add(gcuff);
 
   // Boules de feu : orbe incandescent tenu dans la main
   const fball=new THREE.Group();
@@ -459,7 +468,7 @@ function makeWeapons(color){
   beamCore.rotation.x=Math.PI/2; beamCore.position.set(0,0.005,-4.56); beamCore.visible=false; lgun.add(beamCore);
 
   return {pistol,smg,sword,laser,heatBg,heatFill,glove,fball,lgun,beam,beamCore,
-    colored:[pBarrel,sBarrel,glow,glove,lens,lensGlow,beam],sBarrel};
+    colored:[pBarrel,sBarrel,glow,gmain,gthumb,lens,lensGlow,beam],sBarrel};
 }
 
 /* Traînée du sabre : ruban entre la base et la pointe de la lame, échantillonné
@@ -643,6 +652,7 @@ function buildEnvironment(){
 /* ===================== SESSION / MENU ===================== */
 async function enterVR(){
   if(!started3D) init3D();
+  if(!decodedBuffer) prepareNoMusic();   // pas de piste → session de 2 min
   applyWeapon();
   if(!navigator.xr){ setStatus('WebXR indisponible sur cet appareil.',null); showMenu(); return; }
   try{
@@ -672,12 +682,22 @@ function startCountdown(){
   ensureCtx(); lastCount=0; sfx.start();
   state='countdown'; countdownEnd=performance.now()+3000;
 }
+/* session sans musique : rythme régulier généré, 2 minutes */
+function prepareNoMusic(){
+  decodedBuffer=null; songDuration=120; beats=[];
+  for(let t=1.0; t<songDuration-0.5; t+=0.5) beats.push(t);   // ~120 BPM
+}
 function startSong(){
   const ctx=ensureCtx(); if(ctx.state==='suspended') ctx.resume();
-  playSource=ctx.createBufferSource(); playSource.buffer=decodedBuffer;
-  analyser=ctx.createAnalyser(); analyser.fftSize=128; freqData=new Uint8Array(analyser.frequencyBinCount);
-  playSource.connect(analyser); analyser.connect(ctx.destination);
-  songStartTime=ctx.currentTime+0.05; playSource.start(songStartTime);
+  if(decodedBuffer){
+    playSource=ctx.createBufferSource(); playSource.buffer=decodedBuffer;
+    analyser=ctx.createAnalyser(); analyser.fftSize=128; freqData=new Uint8Array(analyser.frequencyBinCount);
+    playSource.connect(analyser); analyser.connect(ctx.destination);
+    songStartTime=ctx.currentTime+0.05; playSource.start(songStartTime);
+  } else {
+    playSource=null; analyser=null;               // sans musique : on suit juste l'horloge audio
+    songStartTime=ctx.currentTime+0.05;
+  }
   sfx.go();
   state='playing'; updateHudScore();
 }
@@ -748,9 +768,10 @@ function spawnTarget(beatTime,idx,type){
   const lane=LANES[idx%LANES.length], t=type||'normal';
   // couleur associée à une main, ou couleur neutre si l'association est désactivée
   const color = colorMatch ? PALETTE[idx%2] : NEUTRAL_TARGET;
+  const cx = weapon==='fists' ? lane.x*0.45 : lane.x;   // poings : cibles ramenées au centre, devant les gants
   const mesh=getTargetMesh(t,color);
-  mesh.position.set(lane.x,lane.y,SPAWN_Z);
-  targets.push({mesh,beatTime,color,x:lane.x,y:lane.y,hit:false,dead:false,type:t});
+  mesh.position.set(cx,lane.y,SPAWN_Z);
+  targets.push({mesh,beatTime,color,x:cx,y:lane.y,hit:false,dead:false,type:t});
 }
 /* vague déclenchée sur un drop : ~6 cibles normales échelonnées, arrivant depuis le fond */
 function spawnWave(){
@@ -1110,28 +1131,38 @@ function updateFloats(dt){
 }
 
 /* ========================== HUD ========================== */
-function drawHud(l1,l2,gauge,ult){
+function drawHud(l1,l2,gauge,ult,prog,timeStr){
   hudCtx.clearRect(0,0,512,200);
   hudCtx.fillStyle='rgba(11,14,26,.72)'; roundRect(hudCtx,6,6,500,188,22); hudCtx.fill();
-  const withGauge = gauge!=null;
-  hudCtx.textAlign='center'; hudCtx.fillStyle='#f2ede4'; hudCtx.font='600 62px Inter, sans-serif';
-  hudCtx.fillText(l1,256, withGauge?84:96);
-  if(l2){ hudCtx.fillStyle='#8f8ab0'; hudCtx.font='500 24px "IBM Plex Mono", monospace'; hudCtx.fillText(l2,256, withGauge?130:150); }
+  const withGauge = gauge!=null, withTime = prog!=null;
+  hudCtx.textAlign='center';
+  // ---- progression du temps (en haut, blanc/gris : distinct de la barre de charge)
+  if(withTime){
+    hudCtx.fillStyle='#8f8ab0'; hudCtx.font='500 18px "IBM Plex Mono", monospace'; hudCtx.fillText(timeStr,256,27);
+    hudCtx.fillStyle='rgba(255,255,255,.10)'; roundRect(hudCtx,40,35,432,6,3); hudCtx.fill();
+    hudCtx.fillStyle='#f2ede4'; roundRect(hudCtx,40,35,Math.max(4,432*prog),6,3); hudCtx.fill();
+  }
+  hudCtx.fillStyle='#f2ede4'; hudCtx.font='600 58px Inter, sans-serif';
+  hudCtx.fillText(l1,256, withTime?98:(withGauge?84:96));
+  if(l2){ hudCtx.fillStyle='#8f8ab0'; hudCtx.font='500 23px "IBM Plex Mono", monospace'; hudCtx.fillText(l2,256, withTime?134:(withGauge?130:150)); }
+  // ---- barre de charge / ultime (en bas, cyan/or)
   if(withGauge){
-    const x=40,y=156,w=432,h=15, gold=ult||gauge>=1;
-    hudCtx.fillStyle='rgba(255,255,255,.09)'; roundRect(hudCtx,x,y,w,h,8); hudCtx.fill();
-    hudCtx.fillStyle= gold?'#ffcf5c':'#4fd6c8'; roundRect(hudCtx,x,y,Math.max(7,w*gauge),h,8); hudCtx.fill();
-    hudCtx.fillStyle= gold?'#ffcf5c':'#8f8ab0'; hudCtx.font='500 17px "IBM Plex Mono", monospace';
-    hudCtx.fillText(ult?'ULTIME ACTIF':(gauge>=1?'ULTIME PRÊT — A / 2 gâchettes':'charge'), 256, 187);
+    const x=40,y=158,w=432,h=13, gold=ult||gauge>=1;
+    hudCtx.fillStyle='rgba(255,255,255,.09)'; roundRect(hudCtx,x,y,w,h,7); hudCtx.fill();
+    hudCtx.fillStyle= gold?'#ffcf5c':'#4fd6c8'; roundRect(hudCtx,x,y,Math.max(6,w*gauge),h,7); hudCtx.fill();
+    hudCtx.fillStyle= gold?'#ffcf5c':'#8f8ab0'; hudCtx.font='500 15px "IBM Plex Mono", monospace';
+    hudCtx.fillText(ult?'ULTIME ACTIF':(gauge>=1?'ULTIME PRÊT — 2 préhensions':'charge'), 256, 183);
   }
   hudTex.needsUpdate=true;
 }
 function updateHudScore(){
   const ult=ultActive, secs=ult?Math.max(0,Math.ceil((ultEnd-performance.now())/1000)):0;
   const g = ult ? Math.max(0,(ultEnd-performance.now())/ULT_DURATION) : charge;
-  drawHud(String(score), ult?('ULTIME · '+secs+'s'):('combo ×'+combo), g, ult);
+  const t=Math.max(0,songTimeNow()), prog=songDuration>0?Math.min(1,t/songDuration):0, timeStr=fmt(t)+' / '+fmt(songDuration);
+  drawHud(String(score), ult?('ULTIME · '+secs+'s'):('combo ×'+combo), g, ult, prog, timeStr);
   el('hudScore').textContent=score;
-  el('hudCombo').textContent = ult ? ('ULTIME '+secs+'s') : ('combo ×'+combo); }
+  el('hudCombo').textContent = ult ? ('ULTIME '+secs+'s') : ('combo ×'+combo);
+  el('hudTime').textContent=timeStr; }
 function roundRect(c,x,y,w,h,r){ c.beginPath(); c.moveTo(x+r,y);
   c.arcTo(x+w,y,x+w,y+h,r); c.arcTo(x+w,y+h,x,y+h,r); c.arcTo(x,y+h,x,y,r); c.arcTo(x,y,x+w,y,r); c.closePath(); }
 
@@ -1223,7 +1254,7 @@ function loop(){
     }
     updateProjectiles(dt); updateShockwaves(dt); updateFireColumns(dt); updateBlasts(dt);
     if(ultActive&&ultWeapon==='laser') bigBeamClear();
-    if(ultActive && now-lastUltHud>150){ lastUltHud=now; updateHudScore(); }   // décompte de l'ultime
+    if(now-lastUltHud>200){ lastUltHud=now; updateHudScore(); }   // rafraîchit temps + décompte ultime
     if(st>songDuration+1.5) finish();
   }
 
@@ -1233,6 +1264,8 @@ function loop(){
     for(let i=0;i<6;i++) bass+=freqData[i]; bass/=6*255;
     if(bass>bassAvg*1.6 && bass>0.5 && now-lastDrop>4000 && targets.length<40){ lastDrop=now; spawnWave(); }
     bassAvg=bassAvg*0.95+bass*0.05;
+  } else if(state==='playing'){
+    bass=0.2+0.22*Math.abs(Math.sin(songTimeNow()*Math.PI*2));   // pseudo-rythme (session sans musique)
   }
   for(const r of reactive){ r.mesh.material.emissiveIntensity=r.base*(0.55+bass*1.7); }
   hitRing.material.opacity=0.25+bass*0.5;
@@ -1338,7 +1371,8 @@ el('swap').addEventListener('click',()=>{ swapColors=!swapColors; refreshLegend(
 el('startVR').addEventListener('click',()=>{ enterVR(); });
 el('startPreview').addEventListener('click',()=>{
   el('menu').style.display='none'; el('hud2d').style.display='block'; el('back').style.display='block';
-  if(!started3D) init3D(); applyWeapon(); state='idle'; resultMesh.visible=false; hud.visible=true;
+  if(!started3D) init3D(); if(!decodedBuffer) prepareNoMusic();   // pas de piste → session de 2 min
+  applyWeapon(); state='idle'; resultMesh.visible=false; hud.visible=true;
 });
 el('back').addEventListener('click',()=>quitToMenu());
 refreshLegend();
